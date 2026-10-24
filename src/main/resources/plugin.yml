@@ -1,0 +1,14 @@
+name: SlopeClimb
+version: 1.1.1
+main: com.example.slopeclimb.SlopeClimbPlugin
+api-version: '26.1.2'
+description: King of the hill style slope climbing game with enemy and ally pushing mobs
+commands:
+  koth:
+    description: KOTH main command
+    usage: /<command> help
+    permission: slopeclimb.admin
+permissions:
+  slopeclimb.admin:
+    description: Use KOTH commands
+    default: op

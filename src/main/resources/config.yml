@@ -1,0 +1,80 @@
+# コースの最大長さ（マス）
+max-length: 200
+
+# mob をプレイヤー基準で何マス離れた位置に出すか
+spawn-distance: 10
+
+# mob の移動速度倍率（Pathfinder の speed / 手動移動の倍率）
+mob-speed: 1.0
+
+# AIを切って手動で動かす mob（ファントム、ウォーデン、ドラゴン、ウィザー、ブレイズ、アレイ、村人、スニッファー、巨大ウーパー）の
+# 基本速度（1tickあたりのマス数）
+manual-speed: 0.2
+
+# 「巨大ねこ」「巨大ウーパールーパー」の大きさ倍率
+giant-scale: 3.0
+
+# 接触判定の余裕（ブロック）。大きいほど遠くからでも接触扱い
+contact-range: 0.25
+
+# 押されるときの移動速度（1tickあたりのマス数）
+push-speed: 1.0
+
+# 押された後、次に押されるまでの無敵時間（tick）
+push-cooldown-ticks: 30
+
+# プラグイン無効化(サーバー停止)時にコースを元に戻すか
+restore-on-disable: true
+
+# /koth enemy で使える mob
+enemy-mobs:
+  - zombie
+  - husk
+  - skeleton
+  - stray
+  - spider
+  - iron_golem
+  - pig
+  - cow
+  - sheep
+  - chicken
+  - wolf
+  - villager
+  - cat
+  - horse
+  - warden
+  - ender_dragon
+  - wither
+  - blaze
+  - creeper
+  - enderman
+  - ravager
+  - phantom
+
+# /koth ally で使える mob
+ally-mobs:
+  - zombie
+  - husk
+  - skeleton
+  - stray
+  - spider
+  - iron_golem
+  - pig
+  - cow
+  - sheep
+  - chicken
+  - wolf
+  - cat
+  - horse
+  - villager
+  - giant_cat
+  - giant_axolotl
+  - allay
+  - sniffer
+
+# コースのブロック
+materials:
+  stair: STONE_BRICK_STAIRS   # 坂（階段ブロックであること）
+  fill: STONE_BRICKS          # 坂の下の埋め草
+  pad: SMOOTH_STONE           # スタート台
+  goal: GOLD_BLOCK            # 頂上の台
