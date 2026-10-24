@@ -1,0 +1,9 @@
+-proc:none
+-d
+/tmp/jcheck
+/home/claude/SlopeClimb/src/main/java/com/example/slopeclimb/Course.java
+/home/claude/SlopeClimb/src/main/java/com/example/slopeclimb/GameManager.java
+/home/claude/SlopeClimb/src/main/java/com/example/slopeclimb/MobListener.java
+/home/claude/SlopeClimb/src/main/java/com/example/slopeclimb/MobSpec.java
+/home/claude/SlopeClimb/src/main/java/com/example/slopeclimb/SlopeClimbPlugin.java
+/home/claude/SlopeClimb/src/main/java/com/example/slopeclimb/SlopeCommand.java

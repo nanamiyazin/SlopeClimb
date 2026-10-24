@@ -1,14 +1,17 @@
 # コースの最大の長さ（水平方向のマス数。階段+ブロックの2マスで1段上がる）
 max-length: 200
 
-# mob をプレイヤー基準で何マス離れた位置に出すか
+# mob をプレイヤーから何マス離れた場所（ランダム）に出すか
 spawn-distance: 10
 
-# mob の移動速度倍率（Pathfinder の speed / 手動移動の倍率）
+# mob の移動速度倍率
 mob-speed: 1.0
 
-# AIを切って手動で動かす mob（ファントム、ウォーデン、ドラゴン、ウィザー、ブレイズ、アレイ、村人、スニッファー、巨大ウーパー）の
-# 基本速度（1tickあたりのマス数）
+# false: 出現時にプレイヤーの方向を決めて、そのまま直線にだけ動く（横に避けられる）
+# true : 常に今のプレイヤーの位置へ向かって直線で動く
+mob-homing: false
+
+# mob の基本移動速度（1tickあたりのマス数。全 mob 共通）
 manual-speed: 0.2
 
 # 「巨大ねこ」「巨大ウーパールーパー」の大きさ倍率
@@ -17,7 +20,8 @@ giant-scale: 3.0
 # 接触判定の余裕（ブロック）。大きいほど遠くからでも接触扱い
 contact-range: 0.25
 
-# 押されるときの移動速度（1tickあたりのマス数。小さいほどゆっくり押される）
+# 押されるときの移動速度（1tickあたりのマス数。0.25 なら 1秒で5マス）。
+# mob の押す時間（秒）× この速度 × 20 が、押される総距離になる
 push-speed: 0.25
 
 # 頂上の台にとどまれば勝ちになる秒数
@@ -75,10 +79,25 @@ ally-mobs:
   - allay
   - sniffer
 
-# コースのブロック
+# ウォーデン・エンダードラゴン・ウィザーの乱入演出（遠くから現れ、カメラが追う）
+intro:
+  enabled: true
+  distance: 30      # 出現する距離（マス）
+  max-ticks: 200    # 演出の最大の長さ（tick、20tick=1秒）。ボスが近づくと自動で終わる
+
+# 一番下の壁に敵に押し付けられたときのダメージゲージ
+wall-damage:
+  enabled: true
+  gauge-max: 100          # ゲージの最大値
+  per-block: 10           # 壁に押し付けられた1マス分ごとに減る量
+  regen-per-second: 0     # 1秒ごとの自然回復量（0 = 回復しない）
+  kill-on-zero: false     # true にするとゲージが尽きたときプレイヤーが死亡する
+
+# コースのブロック（/koth material <種類> <素材> でも変更できる）
 materials:
   stair: STONE_BRICK_STAIRS   # 坂の階段（階段ブロックであること）
   block: STONE_BRICKS         # 階段の次の1マス（ブロック）
   fill: STONE_BRICKS          # 坂の下の埋め草
   pad: SMOOTH_STONE           # スタート台
   goal: GOLD_BLOCK            # 頂上の台
+  wall: STONE_BRICKS          # 一番下の壁（敵に押し付けられる壁）

@@ -11,6 +11,7 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.entity.EntityTeleportEvent;
 import org.bukkit.event.entity.ExplosionPrimeEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 
 public final class MobListener implements Listener {
 
@@ -63,5 +64,11 @@ public final class MobListener implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onTeleport(EntityTeleportEvent e) {
         if (game.isSlopeMob(e.getEntity()) && !game.isInternalMove()) e.setCancelled(true);
+    }
+
+    /** 乱入演出中に抜けたプレイヤーのゲームモードと位置を戻す */
+    @EventHandler
+    public void onQuit(PlayerQuitEvent e) {
+        game.endCinematicFor(e.getPlayer());
     }
 }

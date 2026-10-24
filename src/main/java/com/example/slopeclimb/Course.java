@@ -14,15 +14,19 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 幅3マスの坂コース（両脇にバリアブロックの壁つき）。
+ * 幅6マスの坂コース（両脇にバリアブロックの壁つき）。
  * 水平2マス（階段 + ブロック）で1段上がる。
- * コース座標: t = 進行方向の距離(坂の入口が0)、s = 横方向のずれ(中央が0、-1.5〜1.5が坂の上)。
+ * コース座標: t = 進行方向の距離(坂の入口が0)、s = 横方向のずれ(中心線が0、-3〜3が坂の上)。
  */
 public final class Course {
 
     public static final int PAD = 3;          // スタート台の長さ
     public static final int PLATFORM = 3;     // 頂上台の長さ
     public static final int WALL_HEIGHT = 4;  // バリアの高さ
+    public static final int WIDTH = 6;        // 坂の幅
+    public static final double HALF_W = WIDTH / 2.0;
+    public static final double MOB_S = HALF_W - 0.6;     // mob が動ける横幅の限界
+    public static final double PLAYER_S = HALF_W - 0.1;  // 押し出し中にプレイヤーが寄れる横幅の限界
 
     public record Backup(int x, int y, int z, BlockData data) {}
 
@@ -33,7 +37,7 @@ public final class Course {
     public final BlockFace dir;
     public final int dx, dz;   // 進行方向
     public final int lx, lz;   // 横方向
-    public final double ox, oz; // 坂入口の原点
+    public final double ox, oz; // 坂入口の原点（横方向はブロックの境目＝中心線）
     public boolean ready = false;
 
     private final Map<Long, Backup> backups = new LinkedHashMap<>();
@@ -50,9 +54,13 @@ public final class Course {
         this.dz = dir.getModZ();
         this.lx = -dz;
         this.lz = dx;
-        this.ox = dx > 0 ? x0 : (dx < 0 ? x0 + 1 : x0 + 0.5);
-        this.oz = dz > 0 ? z0 : (dz < 0 ? z0 + 1 : z0 + 0.5);
+        this.ox = dx > 0 ? x0 : (dx < 0 ? x0 + 1 : x0);
+        this.oz = dz > 0 ? z0 : (dz < 0 ? z0 + 1 : z0);
     }
+
+    /** プレイヤーが下の壁に当たる位置 / 上の壁に当たる位置 */
+    public double minT() { return -PAD + 0.45; }
+    public double maxT() { return length + PLATFORM - 0.45; }
 
     // ---------- 座標変換 ----------
 
@@ -81,7 +89,7 @@ public final class Course {
         if (l.getWorld() != world) return false;
         double t = t(l);
         double s = s(l);
-        if (t < -PAD - 2 || t > length + PLATFORM + 1 || Math.abs(s) > 2.0) return false;
+        if (t < -PAD - 2 || t > length + PLATFORM + 1 || Math.abs(s) > HALF_W + 1.0) return false;
         double sy = surfaceY(t);
         return l.getY() >= sy - 4 && l.getY() <= sy + 6;
     }
@@ -89,7 +97,7 @@ public final class Course {
     public boolean onSummit(Location l) {
         double t = t(l);
         return t >= length && t < length + PLATFORM
-                && Math.abs(s(l)) <= 1.6
+                && Math.abs(s(l)) <= HALF_W
                 && l.getY() >= baseY + height - 0.6;
     }
 
@@ -113,12 +121,24 @@ public final class Course {
         return baseY + height - 1;
     }
 
-    private void buildColumn(int k, int j, BlockData stair, BlockData block, BlockData fill,
-                             BlockData pad, BlockData goal) {
-        double cx = ox + dx * (k + 0.5) + lx * j;
-        double cz = oz + dz * (k + 0.5) + lz * j;
+    /** jj = -4..3（-4 と 3 が両脇のバリア、-3..2 が坂の6列） */
+    private void buildColumn(int k, int jj, BlockData stair, BlockData block, BlockData fill,
+                             BlockData pad, BlockData goal, BlockData wall) {
+        double off = jj + 0.5;
+        double cx = ox + dx * (k + 0.5) + lx * off;
+        double cz = oz + dz * (k + 0.5) + lz * off;
         int x = (int) Math.floor(cx);
         int z = (int) Math.floor(cz);
+
+        // 一番下の壁（敵に押し付けられる壁）
+        if (k == -PAD - 1) {
+            for (int i = -1; i < WALL_HEIGHT; i++) set(x, baseY + i, z, wall);
+            for (int y = baseY - 2; y > baseY - 66 && y >= world.getMinHeight(); y--) {
+                if (world.getBlockAt(x, y, z).getType().isSolid()) break;
+                set(x, y, z, fill);
+            }
+            return;
+        }
 
         // 頂上台の先の行き止まりの壁
         if (k == length + PLATFORM) {
@@ -127,7 +147,7 @@ public final class Course {
         }
 
         // 両脇のバリア
-        if (Math.abs(j) == 2) {
+        if (Math.abs(off) > HALF_W) {
             int start = layerY(k) + ((k >= 0 && k < length) ? 0 : 1);
             for (int i = 0; i < WALL_HEIGHT; i++) set(x, start + i, z, BARRIER);
             return;
@@ -160,12 +180,12 @@ public final class Course {
     }
 
     public List<Runnable> buildJobs(BlockData stair, BlockData block, BlockData fill,
-                                    BlockData pad, BlockData goal) {
+                                    BlockData pad, BlockData goal, BlockData wall) {
         List<Runnable> jobs = new ArrayList<>();
-        for (int k = -PAD; k <= length + PLATFORM; k++) {
-            for (int j = -2; j <= 2; j++) {
-                final int fk = k, fj = j;
-                jobs.add(() -> buildColumn(fk, fj, stair, block, fill, pad, goal));
+        for (int k = -PAD - 1; k <= length + PLATFORM; k++) {
+            for (int jj = -4; jj <= 3; jj++) {
+                final int fk = k, fj = jj;
+                jobs.add(() -> buildColumn(fk, fj, stair, block, fill, pad, goal, wall));
             }
         }
         return jobs;
