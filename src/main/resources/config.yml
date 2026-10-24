@@ -4,15 +4,9 @@ max-length: 200
 # mob をプレイヤーから何マス離れた場所（ランダム）に出すか
 spawn-distance: 10
 
-# mob の移動速度倍率
-mob-speed: 1.0
-
-# false: 出現時にプレイヤーの方向を決めて、そのまま直線にだけ動く（横に避けられる）
-# true : 常に今のプレイヤーの位置へ向かって直線で動く
-mob-homing: false
-
-# mob の基本移動速度（1tickあたりのマス数。全 mob 共通）
-manual-speed: 0.2
+# mob が縦一列にまっすぐ進まないための、坂の進行方向からの最低の傾き（度）。
+# 小さいほど縦長の動き、大きいほど横に大きく振れる。壁にぶつかると跳ね返る
+mob-min-angle: 25
 
 # 「巨大ねこ」「巨大ウーパールーパー」の大きさ倍率
 giant-scale: 3.0
@@ -33,51 +27,105 @@ push-cooldown-ticks: 30
 # プラグイン無効化(サーバー停止)時にコースを元に戻すか
 restore-on-disable: true
 
-# /koth enemy で使える mob
-enemy-mobs:
-  - zombie
-  - husk
-  - skeleton
-  - stray
-  - spider
-  - iron_golem
-  - pig
-  - cow
-  - sheep
-  - chicken
-  - wolf
-  - villager
-  - cat
-  - horse
-  - warden
-  - ender_dragon
-  - wither
-  - blaze
-  - creeper
-  - enderman
-  - ravager
-  - phantom
+# ---------------------------------------------------------------
+# mob の設定（ゲーム内コマンドでは数しか指定できないので、ここで変更する）
+#   seconds : 押す時間（秒）。押される距離 = 秒数 × 20 × push-speed
+#   power   : 押す力。敵と味方は合計の力が大きい方が勝つ
+#             （同じ種類の mob どうしは足し算されず、違う種類は足し算される）
+#   speed   : 移動速度（マス/秒）
+#   hit     : 必中（true = 横にずれていても、プレイヤーの位置を通過すれば必ず接触）
+# mob ごとに書かなかった項目は mob-defaults が使われる。
+# 書いてある mob だけが /koth enemy・/koth ally で使える（空の設定は {} と書く）。
+# ---------------------------------------------------------------
+mob-defaults:
+  seconds: 2.0
+  power: 5
+  speed: 4.0
+  hit: true
 
-# /koth ally で使える mob
+# /koth enemy <mob> [数] で使える mob
+enemy-mobs:
+  zombie: {}
+  husk: {}
+  skeleton: {}
+  stray: {}
+  spider: {}
+  iron_golem:
+    seconds: 3.0
+    power: 12
+  pig: {}
+  cow: {}
+  sheep: {}
+  chicken: {}
+  wolf: {}
+  villager: {}
+  cat: {}
+  horse:
+    power: 8
+  warden:
+    seconds: 5.0
+    power: 50
+  ender_dragon:
+    seconds: 8.0
+    power: 100
+  wither:
+    seconds: 5.0
+    power: 40
+  blaze: {}
+  creeper: {}
+  enderman: {}
+  ravager:
+    seconds: 3.0
+    power: 15
+  phantom: {}
+
+# /koth ally <mob> [数] で使える mob
 ally-mobs:
-  - zombie
-  - husk
-  - skeleton
-  - stray
-  - spider
-  - iron_golem
-  - pig
-  - cow
-  - sheep
-  - chicken
-  - wolf
-  - cat
-  - horse
-  - villager
-  - giant_cat
-  - giant_axolotl
-  - allay
-  - sniffer
+  zombie: {}
+  husk: {}
+  skeleton: {}
+  stray: {}
+  spider: {}
+  iron_golem:
+    seconds: 3.0
+    power: 12
+  pig: {}
+  cow:
+    power: 6
+  sheep: {}
+  chicken: {}
+  wolf: {}
+  cat: {}
+  horse:
+    power: 8
+  villager: {}
+  giant_cat:
+    seconds: 3.0
+    power: 20
+  giant_axolotl:
+    seconds: 3.0
+    power: 20
+  allay: {}
+  sniffer:
+    seconds: 3.0
+    power: 15
+
+# /koth buff <enemy|ally> による強化。強化中は坂の縦半分のブロックが変わる
+#   味方の強化 → 坂の左半分（進行方向に向かって左）が氷ブロックに
+#   敵の強化   → 坂の右半分が ソウルサンドに
+# 強化中は、その側の mob の押す力・押す時間・速度が倍率の分だけ上がる
+buff:
+  duration-seconds: 30
+  enemy:
+    block: SOUL_SAND
+    power-multiplier: 2.0
+    seconds-multiplier: 1.5
+    speed-multiplier: 1.5
+  ally:
+    block: ICE
+    power-multiplier: 2.0
+    seconds-multiplier: 1.5
+    speed-multiplier: 1.5
 
 # ウォーデン・エンダードラゴン・ウィザーの乱入演出（遠くから現れ、カメラが追う）
 intro:

@@ -41,6 +41,7 @@ public final class Course {
     public boolean ready = false;
 
     private final Map<Long, Backup> backups = new LinkedHashMap<>();
+    private BlockData blockData;   // 階段の次の1マスに使っているブロック（強化が終わったときに戻す）
     private static final BlockData AIR = Bukkit.createBlockData(Material.AIR);
     private static final BlockData BARRIER = Bukkit.createBlockData(Material.BARRIER);
 
@@ -181,6 +182,7 @@ public final class Course {
 
     public List<Runnable> buildJobs(BlockData stair, BlockData block, BlockData fill,
                                     BlockData pad, BlockData goal, BlockData wall) {
+        this.blockData = block;
         List<Runnable> jobs = new ArrayList<>();
         for (int k = -PAD - 1; k <= length + PLATFORM; k++) {
             for (int jj = -4; jj <= 3; jj++) {
@@ -189,6 +191,23 @@ public final class Course {
             }
         }
         return jobs;
+    }
+
+    public BlockData blockData() { return blockData; }
+
+    /**
+     * 坂の縦半分（進行方向に向かって左半分 or 右半分）の「ブロック列」を指定のブロックに置き換える。
+     * 階段の列はそのまま（階段には氷やソウルサンドがないため）。元に戻すときは blockData() を渡す。
+     */
+    public void setHalf(boolean left, BlockData data) {
+        for (int k = 1; k < length; k += 2) {
+            for (int jj = left ? -3 : 0; jj <= (left ? -1 : 2); jj++) {
+                double off = jj + 0.5;
+                int x = (int) Math.floor(ox + dx * (k + 0.5) + lx * off);
+                int z = (int) Math.floor(oz + dz * (k + 0.5) + lz * off);
+                set(x, layerY(k), z, data);
+            }
+        }
     }
 
     public List<Runnable> restoreJobs() {

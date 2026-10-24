@@ -21,6 +21,7 @@ import org.bukkit.block.data.BlockData;
 import org.bukkit.block.data.Directional;
 import org.bukkit.block.data.type.Stairs;
 import org.bukkit.boss.BossBar;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Ageable;
 import org.bukkit.entity.ArmorStand;
@@ -37,6 +38,8 @@ import org.bukkit.util.Vector;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -51,64 +54,65 @@ public final class GameManager {
 
     public enum Role { ENEMY, ALLY }
 
-    /** mob がプレイヤーに近づいてくる側（坂の上=FRONT / 下=BACK / 左右=壁際） */
-    public enum Side {
-        FRONT("前(坂の上)"), BACK("後ろ(坂の下)"), LEFT("左"), RIGHT("右"), RANDOM("ランダム");
-
-        public final String label;
-        Side(String label) { this.label = label; }
-
-        public static Side parse(String s) {
-            return switch (s.toLowerCase(Locale.ROOT)) {
-                case "front", "up" -> FRONT;
-                case "back", "down" -> BACK;
-                case "left" -> LEFT;
-                case "right" -> RIGHT;
-                case "random" -> RANDOM;
-                default -> null;
-            };
-        }
-    }
-
-    /** seconds = 押す時間(秒)、power = 押す力(競合時に強い方が勝つ) */
+    /** seconds = 押す時間(秒)、power = 押す力(競合時に強い方が勝つ)、sureHit = 必中 */
     public static final class MobInfo {
         private final Role role;
         private final double seconds;
         private final int power;
         private final MobSpec spec;
-        double dirT, dirS;      // 進む方向（コース座標・正規化）
-        boolean riding = false; // 押している最中（プレイヤーについていく状態）
+        final double speed;       // 1tickあたりのマス数
+        final boolean sureHit;    // 必中（横にずれていても、通過すれば必ず接触する）
+        double dirT, dirS;        // 進む方向（コース座標・正規化）
+        int latSign = 1;          // 横方向の向き（壁で反射すると反転）
+        boolean riding = false;   // 押している最中（プレイヤーについていく状態）
 
-        MobInfo(Role role, double seconds, int power, MobSpec spec) {
+        MobInfo(Role role, double seconds, int power, MobSpec spec, double speed, boolean sureHit) {
             this.role = role;
             this.seconds = seconds;
             this.power = power;
             this.spec = spec;
+            this.speed = speed;
+            this.sureHit = sureHit;
         }
 
         public Role role() { return role; }
         public double seconds() { return seconds; }
         public int power() { return power; }
         public MobSpec spec() { return spec; }
+
+        /** 縦一列にまっすぐ進まないよう、坂の横方向の成分を最低限持たせる */
+        void enforceLateral(double minS) {
+            if (Math.abs(dirS) >= minS) {
+                latSign = dirS > 0 ? 1 : -1;
+                return;
+            }
+            double signT = dirT >= 0 ? 1 : -1;
+            dirS = latSign * minS;
+            dirT = signT * Math.sqrt(1 - minS * minS);
+        }
     }
+
+    private record Force(int enemyPower, double enemySec, int allyPower, double allySec) {}
 
     private static final class Push {
         final int sign;          // -1 = 坂の下へ押される(敵) / +1 = 坂の上へ押される(味方)
-        final double total;      // 押される総距離(マス)。壁で動けなくても、この距離分はそのまま押し続ける
+        double total;            // 押される総距離(マス)。壁で動けなくても、この距離分はそのまま押し続ける
         final double speed;
         final boolean back;
         final List<UUID> riders; // 一緒に押されている mob（勝った側も負けた側も）
+        int power;               // 今押している側の押す力
         double moved = 0;
         int played = 0;
         double pressed = 0;      // 壁に押し付けられた距離
         int pressedCounted = 0;
 
-        Push(int sign, double total, double speed, boolean back, List<UUID> riders) {
+        Push(int sign, double total, double speed, boolean back, List<UUID> riders, int power) {
             this.sign = sign;
             this.total = total;
             this.speed = speed;
             this.back = back;
             this.riders = riders;
+            this.power = power;
         }
     }
 
@@ -172,8 +176,28 @@ public final class GameManager {
         return mi == null ? null : mi.role();
     }
 
+    private static String mobsKey(Role role) {
+        return role == Role.ENEMY ? "enemy-mobs" : "ally-mobs";
+    }
+
+    /** config の enemy-mobs / ally-mobs に書かれている mob 名（旧形式のリストにも対応） */
     public List<String> allowedMobs(Role role) {
-        return cfg().getStringList(role == Role.ENEMY ? "enemy-mobs" : "ally-mobs");
+        ConfigurationSection sec = cfg().getConfigurationSection(mobsKey(role));
+        if (sec != null) return new ArrayList<>(sec.getKeys(false));
+        return cfg().getStringList(mobsKey(role));
+    }
+
+    /** mob ごとの設定値（なければ mob-defaults） */
+    private double mobDouble(Role role, MobSpec spec, String field, double fallback) {
+        String path = mobsKey(role) + "." + spec.key() + "." + field;
+        if (cfg().isSet(path)) return cfg().getDouble(path, fallback);
+        return cfg().getDouble("mob-defaults." + field, fallback);
+    }
+
+    private boolean mobBool(Role role, MobSpec spec, String field, boolean fallback) {
+        String path = mobsKey(role) + "." + spec.key() + "." + field;
+        if (cfg().isSet(path)) return cfg().getBoolean(path, fallback);
+        return cfg().getBoolean("mob-defaults." + field, fallback);
     }
 
     /** 許可リストにある mob のみ MobSpec を返す。無ければ null */
@@ -310,6 +334,7 @@ public final class GameManager {
         clearMobs(null);
         for (UUID id : new ArrayList<>(pushes.keySet())) endPush(id);
         hideAllGauges();
+        endAllBuffs();
         startTimes.clear();
         finished.clear();
         holdSince.clear();
@@ -327,6 +352,7 @@ public final class GameManager {
     public void shutdown() {
         endAllCinematics();
         hideAllGauges();
+        endAllBuffs();
         clearMobs(null);
         if (course != null && course.ready && cfg().getBoolean("restore-on-disable", true)) {
             for (Runnable r : course.restoreJobs()) r.run();
@@ -363,32 +389,19 @@ public final class GameManager {
 
     // ---------- Mob ----------
 
-    /** プレイヤーの (t, s) から dist マス離れたランダムな地点を返す {t, s} */
-    private double[] spawnPoint(Course c, double pt, double ps, Side side, double dist, boolean free) {
+    /** プレイヤーの (t, s) から dist マス離れたランダムな地点 {t, s}（敵=坂の上側、味方=坂の下側） */
+    private double[] spawnPoint(Course c, double pt, double ps, boolean front, double dist, boolean free) {
         ThreadLocalRandom r = ThreadLocalRandom.current();
-        double t, s;
-        switch (side) {
-            case LEFT, RIGHT -> {
-                s = side == Side.LEFT ? -Course.MOB_S : Course.MOB_S;
-                t = pt + r.nextDouble(-3, 3);
-                if (Math.abs(s - ps) < 3.0) {
-                    // プレイヤーが同じ壁際にいるときは、坂に沿って少し離す
-                    t = pt + (r.nextBoolean() ? 1 : -1) * r.nextDouble(5, 8);
-                }
-            }
-            default -> {
-                s = r.nextDouble(-Course.MOB_S, Course.MOB_S);
-                double dl = s - ps;
-                double dt = Math.sqrt(Math.max(1.0, dist * dist - dl * dl));   // 直線距離がちょうど dist になる
-                t = side == Side.BACK ? pt - dt : pt + dt;
-            }
-        }
+        double s = r.nextDouble(-Course.MOB_S, Course.MOB_S);
+        double dl = s - ps;
+        double dt = Math.sqrt(Math.max(1.0, dist * dist - dl * dl));   // 直線距離がちょうど dist になる
+        double t = front ? pt + dt : pt - dt;
         if (!free) t = clamp(t, -2.0, c.length + Course.PLATFORM - 0.5);
         return new double[]{t, s};
     }
 
     /** @return メッセージ */
-    public String spawn(Role role, MobSpec spec, double seconds, int power, int count, Side side, Player anchor) {
+    public String spawn(Role role, MobSpec spec, int count, Player anchor) {
         Course c = course;
         if (c == null || !c.ready) return "コースがまだありません（生成中の可能性もあります）。";
         EntityType type = entityType(spec);
@@ -409,34 +422,41 @@ public final class GameManager {
         boolean intro = spec.intro() && cfg().getBoolean("intro.enabled", true)
                 && !cinematics.containsKey(ap.getUniqueId());
         double dist = intro ? cfg().getDouble("intro.distance", 30.0) : cfg().getDouble("spawn-distance", 10.0);
-        Side base = side != null ? side : (role == Role.ENEMY ? Side.FRONT : Side.BACK);
+        boolean front = role == Role.ENEMY;   // 敵は坂の上から、味方は坂の下から近づく
+        // 押す時間・押す力・速さ・必中は config の mob 設定から読む
+        double seconds = mobDouble(role, spec, "seconds", 2.0);
+        int power = (int) Math.round(mobDouble(role, spec, "power", 5));
+        double speedPs = mobDouble(role, spec, "speed", 4.0);
+        boolean sureHit = mobBool(role, spec, "hit", true);
+        double minS = Math.sin(Math.toRadians(cfg().getDouble("mob-min-angle", 25.0)));
 
-        ThreadLocalRandom rnd = ThreadLocalRandom.current();
         int spawned = 0;
         LivingEntity firstBoss = null;
         MobInfo firstInfo = null;
         for (int i = 0; i < count; i++) {
-            Side sd = base == Side.RANDOM ? Side.values()[rnd.nextInt(4)] : base;
-            if (intro && (sd == Side.LEFT || sd == Side.RIGHT)) {
-                sd = role == Role.ENEMY ? Side.FRONT : Side.BACK;   // 遠くからの登場は坂の軸に沿って
-            }
             boolean free = intro && spec.move() == MobSpec.Move.FLY;
-            double[] pos = spawnPoint(c, pt, psS, sd, dist, free);
+            double[] pos = spawnPoint(c, pt, psS, front, dist, free);
             double t = pos[0], s = pos[1];
 
-            // 進む方向 = 出現地点からプレイヤーの位置へ向かう直線
+            // 進む方向 = 出現地点からプレイヤーの位置へ向かう直線（ただし縦一列にはならないよう斜めにする）
             double dT = pt - t, dS = psS - s;
             double len = Math.hypot(dT, dS);
             if (len < 0.01) {
-                dT = sd == Side.BACK ? 1 : -1;
+                dT = front ? -1 : 1;
                 dS = 0;
                 len = 1;
             }
+            MobInfo mi = new MobInfo(role, seconds, power, spec, speedPs / 20.0, sureHit);
+            mi.dirT = dT / len;
+            mi.dirS = dS / len;
+            mi.latSign = Math.abs(dS) > 1e-3 ? (dS > 0 ? 1 : -1)
+                    : (s > 0 ? -1 : (s < 0 ? 1 : (ThreadLocalRandom.current().nextBoolean() ? 1 : -1)));
+            mi.enforceLateral(minS);
 
             Location loc = c.at(t, s);
             loc.add(0, spec.hover(), 0);
-            double vx = (dT / len) * c.dx + (dS / len) * c.lx;
-            double vz = (dT / len) * c.dz + (dS / len) * c.lz;
+            double vx = mi.dirT * c.dx + mi.dirS * c.lx;
+            double vz = mi.dirT * c.dz + mi.dirS * c.lz;
             loc.setYaw((float) Math.toDegrees(Math.atan2(-vx, vz)) + spec.yawOffset());
             loc.setPitch(0f);
 
@@ -463,13 +483,11 @@ public final class GameManager {
                 if (bar != null) bar.setVisible(false);
             }
             le.customName(Component.text(
-                    (role == Role.ENEMY ? "敵" : "味方") + " 力" + power + " / " + fmtSec(seconds) + "秒",
+                    (role == Role.ENEMY ? "敵" : "味方") + " 力" + power + " / " + fmtSec(seconds) + "秒"
+                            + (sureHit ? " [必中]" : ""),
                     role == Role.ENEMY ? NamedTextColor.RED : NamedTextColor.GREEN));
             le.setCustomNameVisible(true);
 
-            MobInfo mi = new MobInfo(role, seconds, power, spec);
-            mi.dirT = dT / len;
-            mi.dirS = dS / len;
             mobs.put(le.getUniqueId(), mi);
             if (firstBoss == null) {
                 firstBoss = le;
@@ -483,8 +501,8 @@ public final class GameManager {
         }
 
         return (role == Role.ENEMY ? "敵" : "味方") + " " + spec.key() + " を " + spawned
-                + " 体召喚しました（押す時間 " + fmtSec(seconds) + "秒 / 押す力 " + power + " / 近づく側 "
-                + base.label + "）";
+                + " 体召喚しました（押す時間 " + fmtSec(seconds) + "秒 / 押す力 " + power
+                + " / 速さ " + fmtSec(speedPs) + "マス/秒 / " + (sureHit ? "必中" : "通常接触") + "）";
     }
 
     public int clearMobs(Role only) {
@@ -499,6 +517,105 @@ public final class GameManager {
             n++;
         }
         return n;
+    }
+
+    // ---------- 強化（バフ） ----------
+
+    private final Map<Role, Long> buffUntil = new EnumMap<>(Role.class);
+    private final Map<Role, Long> buffLen = new EnumMap<>(Role.class);
+    private final Map<Role, net.kyori.adventure.bossbar.BossBar> buffBars = new EnumMap<>(Role.class);
+
+    private static String roleKey(Role role) {
+        return role == Role.ENEMY ? "enemy" : "ally";
+    }
+
+    private static String roleName(Role role) {
+        return role == Role.ENEMY ? "敵" : "味方";
+    }
+
+    /** 強化中なら config の倍率、そうでなければ 1.0 */
+    private double buffMult(Role role, String key) {
+        if (!buffUntil.containsKey(role)) return 1.0;
+        return cfg().getDouble("buff." + roleKey(role) + "." + key, 1.0);
+    }
+
+    private BlockData buffBlockData(Role role) {
+        Material def = role == Role.ENEMY ? Material.SOUL_SAND : Material.ICE;
+        Material m = Material.matchMaterial(cfg().getString("buff." + roleKey(role) + ".block", def.name()));
+        return ((m != null && m.isBlock()) ? m : def).createBlockData();
+    }
+
+    /** 敵 / 味方の強化を始める（強化中にもう一度実行すると時間がリセットされる）。@return エラーメッセージ。成功時は null */
+    public String buff(Role role) {
+        Course c = course;
+        if (c == null || !c.ready) return "コースがまだありません。";
+        long len = Math.max(20L, Math.round(cfg().getDouble("buff.duration-seconds", 30.0) * 20));
+        boolean already = buffUntil.containsKey(role);
+        buffUntil.put(role, tick + len);
+        buffLen.put(role, len);
+
+        String name = roleName(role);
+        if (!already) {
+            // 味方=進行方向に向かって左半分が氷 / 敵=右半分がソウルサンド
+            c.setHalf(role == Role.ALLY, buffBlockData(role));
+            net.kyori.adventure.bossbar.BossBar bar = net.kyori.adventure.bossbar.BossBar.bossBar(
+                    Component.text(name + "強化中", role == Role.ENEMY ? NamedTextColor.RED : NamedTextColor.GREEN), 1f,
+                    role == Role.ENEMY ? net.kyori.adventure.bossbar.BossBar.Color.RED
+                            : net.kyori.adventure.bossbar.BossBar.Color.GREEN,
+                    net.kyori.adventure.bossbar.BossBar.Overlay.PROGRESS);
+            buffBars.put(role, bar);
+            for (Player p : c.world.getPlayers()) p.showBossBar(bar);
+            Bukkit.broadcast(Component.text("⚡ " + name + "の mob が強化された！（" + (len / 20) + "秒）"
+                    + (role == Role.ENEMY ? " 坂の右半分がソウルサンドに" : " 坂の左半分が氷に"),
+                    role == Role.ENEMY ? NamedTextColor.RED : NamedTextColor.GREEN));
+        } else {
+            Bukkit.broadcast(Component.text("⚡ " + name + "の強化を延長！（" + (len / 20) + "秒）",
+                    role == Role.ENEMY ? NamedTextColor.RED : NamedTextColor.GREEN));
+        }
+        return null;
+    }
+
+    /** 強化をすべて終わらせる。@return エラーメッセージ。成功時は null */
+    public String buffOff() {
+        if (buffUntil.isEmpty()) return "強化中ではありません。";
+        for (Role role : new ArrayList<>(buffUntil.keySet())) endBuff(role, true);
+        return null;
+    }
+
+    private void endAllBuffs() {
+        for (Role role : new ArrayList<>(buffUntil.keySet())) endBuff(role, false);
+    }
+
+    private void endBuff(Role role, boolean announce) {
+        if (buffUntil.remove(role) == null) return;
+        buffLen.remove(role);
+        net.kyori.adventure.bossbar.BossBar bar = buffBars.remove(role);
+        if (bar != null) {
+            for (Player p : Bukkit.getOnlinePlayers()) p.hideBossBar(bar);
+        }
+        Course c = course;
+        if (c != null && c.ready) c.setHalf(role == Role.ALLY, c.blockData());   // 元のブロックに戻す
+        if (announce) {
+            Bukkit.broadcast(Component.text("⚡ " + roleName(role) + "の強化が終わった", NamedTextColor.GRAY));
+        }
+    }
+
+    private void tickBuffs() {
+        if (buffUntil.isEmpty()) return;
+        for (Role role : new ArrayList<>(buffUntil.keySet())) {
+            long remain = buffUntil.get(role) - tick;
+            if (remain <= 0) {
+                endBuff(role, true);
+                continue;
+            }
+            net.kyori.adventure.bossbar.BossBar bar = buffBars.get(role);
+            if (bar != null) {
+                long len = buffLen.getOrDefault(role, remain);
+                bar.progress((float) clamp(remain / (double) len, 0, 1));
+                bar.name(Component.text(roleName(role) + "強化中  あと " + ((remain + 19) / 20) + " 秒",
+                        role == Role.ENEMY ? NamedTextColor.RED : NamedTextColor.GREEN));
+            }
+        }
     }
 
     // ---------- 乱入演出（カメラワーク） ----------
@@ -631,6 +748,7 @@ public final class GameManager {
     public void tick() {
         tick++;
         tickCinematics();
+        tickBuffs();
         Course c = course;
         if (c == null || !c.ready) return;
 
@@ -647,7 +765,7 @@ public final class GameManager {
             }
             MobInfo mi = e.getValue();
             if (mi.riding) continue;   // 押している最中はプレイヤーについていく
-            if (moveStraight(c, le, mi, ps)) {
+            if (moveStraight(c, le, mi)) {
                 le.remove();
                 it.remove();
             }
@@ -673,28 +791,24 @@ public final class GameManager {
         }
     }
 
-    /** mob を決められた方向へ直線に動かす。コースの外へ抜けたら true（削除） */
-    private boolean moveStraight(Course c, LivingEntity ent, MobInfo mi, List<Player> ps) {
+    /** mob を直線に動かす（縦一列にはならず斜めに進み、横の壁で反射する）。コースの外へ抜けたら true（削除） */
+    private boolean moveStraight(Course c, LivingEntity ent, MobInfo mi) {
         MobSpec spec = mi.spec();
         Location ml = ent.getLocation();
         double t = c.t(ml), s = c.s(ml);
 
-        if (cfg().getBoolean("mob-homing", false) && !ps.isEmpty()) {
-            Player target = nearest(ps, ml);
-            if (target != null) {
-                double dT = c.t(target.getLocation()) - t;
-                double dS = clamp(c.s(target.getLocation()), -Course.MOB_S, Course.MOB_S) - s;
-                double len = Math.hypot(dT, dS);
-                if (len > 0.05) {
-                    mi.dirT = dT / len;
-                    mi.dirS = dS / len;
-                }
-            }
+        double sp = mi.speed * buffMult(mi.role(), "speed-multiplier");
+        double nt = t + mi.dirT * sp;
+        double ns = s + mi.dirS * sp;
+        if (ns > Course.MOB_S) {
+            ns = Course.MOB_S;
+            mi.dirS = -Math.abs(mi.dirS);
+            mi.latSign = -1;
+        } else if (ns < -Course.MOB_S) {
+            ns = -Course.MOB_S;
+            mi.dirS = Math.abs(mi.dirS);
+            mi.latSign = 1;
         }
-
-        double speed = cfg().getDouble("manual-speed", 0.2) * cfg().getDouble("mob-speed", 1.0);
-        double nt = t + mi.dirT * speed;
-        double ns = clamp(s + mi.dirS * speed, -Course.MOB_S, Course.MOB_S);
 
         double lo = -Course.PAD - 0.5;
         double hi = c.length + Course.PLATFORM + 0.5;
@@ -741,51 +855,33 @@ public final class GameManager {
             if (t < c.length - 1) finished.remove(id);
         }
 
-        // 押し出し中
         Push push = pushes.get(id);
+        if (push == null && tick < immuneUntil.getOrDefault(id, 0L)) return;
+
+        List<Entity> touching = findTouching(c, p);
+
+        // 押されている最中でも、新しく触れた mob は押しに加わる（押し返しもできる）
         if (push != null) {
-            stepPush(c, p, push);
+            if (!touching.isEmpty()) joinPush(p, push, touching);
+            Push cur = pushes.get(id);
+            if (cur != null) stepPush(c, p, cur);
             return;
         }
 
-        if (tick < immuneUntil.getOrDefault(id, 0L)) return;
-
-        // 接触判定
-        double range = cfg().getDouble("contact-range", 0.25);
-        BoundingBox pb = p.getBoundingBox().clone().expand(range);
-        List<Entity> touching = new ArrayList<>();
-        int enemyPower = -1, allyPower = -1;
-        double enemySec = 0, allySec = 0;
-        for (Entity ent : p.getNearbyEntities(6, 6, 6)) {
-            MobInfo mi = mobs.get(ent.getUniqueId());
-            if (mi == null || mi.riding) continue;
-            boolean hit;
-            double cr = mi.spec().contactRadius();
-            if (cr > 0) {
-                Location el = ent.getLocation();
-                double ddx = el.getX() - loc.getX(), ddz = el.getZ() - loc.getZ();
-                hit = ddx * ddx + ddz * ddz <= cr * cr && Math.abs(el.getY() - loc.getY()) <= 6;
-            } else {
-                hit = pb.overlaps(ent.getBoundingBox());
-            }
-            if (!hit) continue;
-            touching.add(ent);
-            if (mi.role() == Role.ENEMY) {
-                if (mi.power() > enemyPower) { enemyPower = mi.power(); enemySec = mi.seconds(); }
-            } else {
-                if (mi.power() > allyPower) { allyPower = mi.power(); allySec = mi.seconds(); }
-            }
-        }
         if (touching.isEmpty()) return;
 
+        Force f = forceOf(infosOf(touching));
         boolean back;
         double sec;
-        if (enemyPower > allyPower) {
+        int power;
+        if (f.enemyPower() > f.allyPower()) {
             back = true;
-            sec = enemySec;
-        } else if (allyPower > enemyPower) {
+            sec = f.enemySec();
+            power = f.enemyPower();
+        } else if (f.allyPower() > f.enemyPower()) {
             back = false;
-            sec = allySec;
+            sec = f.allySec();
+            power = f.allyPower();
         } else {
             // 力が同じ → 押し合い互角（誰も動かず、mob も消えない。そのまま直進を続ける）
             p.sendActionBar(Component.text("押し合い互角！", NamedTextColor.YELLOW));
@@ -794,7 +890,7 @@ public final class GameManager {
         }
 
         // 触れた mob は全員（勝った側も負けた側も）、押されている間プレイヤーと一緒に動く。
-        // 壁で動けなくなっても、押す距離の分だけ押し続けるまで消えない。
+        // 壁で動けなくなっても、押す時間が終わるまで消えない。
         List<UUID> riders = new ArrayList<>();
         for (Entity ent : touching) {
             MobInfo mi = mobs.get(ent.getUniqueId());
@@ -806,12 +902,147 @@ public final class GameManager {
         // 押す時間(秒) × push-speed(1tickあたりのマス数) × 20tick = 押される総距離
         double speed = cfg().getDouble("push-speed", 0.25);
         double total = Math.max(speed, sec * 20.0 * speed);
-        pushes.put(id, new Push(back ? -1 : 1, total, speed, back, riders));
+        pushes.put(id, new Push(back ? -1 : 1, total, speed, back, riders, power));
         if (back) {
-            p.sendActionBar(Component.text("敵に " + fmtSec(sec) + " 秒押し戻される！", NamedTextColor.RED));
+            p.sendActionBar(Component.text("敵に " + fmtSec(sec) + " 秒押し戻される！（合計力 " + power + "）", NamedTextColor.RED));
         } else {
-            p.sendActionBar(Component.text("味方が " + fmtSec(sec) + " 秒押してくれる！", NamedTextColor.GREEN));
+            p.sendActionBar(Component.text("味方が " + fmtSec(sec) + " 秒押してくれる！（合計力 " + power + "）", NamedTextColor.GREEN));
         }
+    }
+
+    /** プレイヤーに接触している（押し中でない）mob を集める */
+    private List<Entity> findTouching(Course c, Player p) {
+        Location loc = p.getLocation();
+        double t = c.t(loc);
+        double range = cfg().getDouble("contact-range", 0.25);
+        BoundingBox pb = p.getBoundingBox().clone().expand(range);
+        List<Entity> out = new ArrayList<>();
+        for (Entity ent : p.getNearbyEntities(8, 8, 8)) {
+            MobInfo mi = mobs.get(ent.getUniqueId());
+            if (mi == null || mi.riding) continue;
+            Location el = ent.getLocation();
+            boolean hit;
+            double cr = mi.spec().contactRadius();
+            if (mi.sureHit) {
+                // 必中: 横にずれていても、プレイヤーの位置（坂の進行方向）を通過したら必ず接触する
+                double tol = Math.max(0.8, cr) + mi.speed * 1.5;
+                hit = Math.abs(c.t(el) - t) <= tol && Math.abs(el.getY() - loc.getY()) <= 8;
+            } else if (cr > 0) {
+                double ddx = el.getX() - loc.getX(), ddz = el.getZ() - loc.getZ();
+                hit = ddx * ddx + ddz * ddz <= cr * cr && Math.abs(el.getY() - loc.getY()) <= 6;
+            } else {
+                hit = pb.overlaps(ent.getBoundingBox());
+            }
+            if (hit) out.add(ent);
+        }
+        return out;
+    }
+
+    /**
+     * 敵側・味方側それぞれの合計の押す力と、押す時間を求める。
+     * 同じ種類の mob どうしは足し算しない（種類ごとに最大の力を1つだけ数える）。
+     * 違う種類の mob の力は足し算する。例: ゾンビ5 + ゾンビ5 + ウィザー10 = 15
+     * 押す時間は、その側で一番力の強い mob のもの（同じ力なら長い方）。
+     */
+    private Force forceOf(Collection<MobInfo> infos) {
+        Map<String, Integer> enemy = new HashMap<>();
+        Map<String, Integer> ally = new HashMap<>();
+        int eTop = -1, aTop = -1;
+        double eSec = 0, aSec = 0;
+        for (MobInfo mi : infos) {
+            int pw = effPower(mi);
+            double sc = effSec(mi);
+            if (mi.role() == Role.ENEMY) {
+                enemy.merge(mi.spec().key(), pw, Math::max);
+                if (pw > eTop || (pw == eTop && sc > eSec)) {
+                    eTop = pw;
+                    eSec = sc;
+                }
+            } else {
+                ally.merge(mi.spec().key(), pw, Math::max);
+                if (pw > aTop || (pw == aTop && sc > aSec)) {
+                    aTop = pw;
+                    aSec = sc;
+                }
+            }
+        }
+        int ep = enemy.isEmpty() ? -1 : enemy.values().stream().mapToInt(Integer::intValue).sum();
+        int ap = ally.isEmpty() ? -1 : ally.values().stream().mapToInt(Integer::intValue).sum();
+        return new Force(ep, eSec, ap, aSec);
+    }
+
+    /** 強化中なら倍率をかけた押す力 / 押す時間 */
+    private int effPower(MobInfo mi) {
+        return (int) Math.round(mi.power() * buffMult(mi.role(), "power-multiplier"));
+    }
+
+    private double effSec(MobInfo mi) {
+        return mi.seconds() * buffMult(mi.role(), "seconds-multiplier");
+    }
+
+    private List<MobInfo> infosOf(Collection<Entity> entities) {
+        List<MobInfo> out = new ArrayList<>();
+        for (Entity ent : entities) {
+            MobInfo mi = mobs.get(ent.getUniqueId());
+            if (mi != null) out.add(mi);
+        }
+        return out;
+    }
+
+    /** 押されている最中に新しく触れた mob の処理（押し返し・互角・加勢）。力は全員分を合計し直す */
+    private void joinPush(Player p, Push push, List<Entity> touching) {
+        UUID id = p.getUniqueId();
+
+        // これまで一緒に押されている mob + 新しく触れた mob 全員で、力を合計し直す
+        List<MobInfo> all = new ArrayList<>();
+        for (UUID u : push.riders) {
+            MobInfo mi = mobs.get(u);
+            if (mi != null) all.add(mi);
+        }
+        all.addAll(infosOf(touching));
+        Force f = forceOf(all);
+
+        int samePower = push.back ? f.enemyPower() : f.allyPower();
+        double sameSec = push.back ? f.enemySec() : f.allySec();
+        int oppPower = push.back ? f.allyPower() : f.enemyPower();
+        double oppSec = push.back ? f.allySec() : f.enemySec();
+
+        // 合計の力が同じ → 互角。押しが止まり、mob は消えずに直進に戻る
+        if (oppPower >= 0 && oppPower == samePower) {
+            for (MobInfo mi : all) mi.riding = false;
+            pushes.remove(id);
+            p.sendActionBar(Component.text("押し合い互角！（合計力 " + samePower + " 同士）", NamedTextColor.YELLOW));
+            immuneUntil.put(id, tick + 20);
+            return;
+        }
+
+        for (Entity ent : touching) {
+            MobInfo mi = mobs.get(ent.getUniqueId());
+            if (mi != null) {
+                mi.riding = true;
+                push.riders.add(ent.getUniqueId());
+            }
+        }
+
+        if (oppPower > samePower) {
+            // 逆側の合計のほうが強い → 押し返される。向きが反転し、押す時間も逆側のものになる
+            boolean newBack = !push.back;
+            double total = Math.max(push.speed, oppSec * 20.0 * push.speed);
+            pushes.put(id, new Push(newBack ? -1 : 1, total, push.speed, newBack, push.riders, oppPower));
+            if (newBack) {
+                p.sendActionBar(Component.text("敵に押し返された！（合計力 " + oppPower + " 対 " + samePower + "）", NamedTextColor.RED));
+            } else {
+                p.sendActionBar(Component.text("味方が押し返した！（合計力 " + oppPower + " 対 " + samePower + "）", NamedTextColor.GREEN));
+            }
+            p.playSound(p.getLocation(), Sound.ITEM_SHIELD_BLOCK, 1f, 1f);
+        } else {
+            // 押している側が優勢のまま → 押す時間が今より長ければ延長する
+            double remaining = push.total - push.moved;
+            double extra = sameSec * 20.0 * push.speed;
+            if (extra > remaining) push.total = push.moved + extra;
+            push.power = samePower;
+        }
+        // 逆側で力が弱い mob は押し返せないが、一緒に押されて運ばれる
     }
 
     /** 接触した mob を消す */

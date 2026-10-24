@@ -47,6 +47,7 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
                 String err = game.remove();
                 sender.sendMessage(err == null ? "§aコースを元に戻しています..." : "§c" + err);
             }
+            case "buff" -> buff(sender, a);
             case "material" -> material(sender, a);
             case "info" -> info(sender);
             case "reload" -> {
@@ -62,14 +63,13 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
         s.sendMessage("§6=== KOTH (SlopeClimb) ===");
         s.sendMessage("§e/" + l + " create <長さ> [階段素材] [ブロック素材] §7- 向いている方向に幅6の坂を生成（階段+ブロックの2マスで1段、両脇バリア、一番下に壁）");
         s.sendMessage("§e/" + l + " material <stair|block|fill|pad|goal|wall> <素材> §7- 坂の素材を変更して保存");
-        s.sendMessage("§e/" + l + " enemy <mob> <押し戻す秒数> [押す力] [数] [方向] [プレイヤー] §7- 敵を召喚");
-        s.sendMessage("§e/" + l + " ally <mob> <押す秒数> [押す力] [数] [方向] [プレイヤー] §7- 味方を召喚");
-        s.sendMessage("§7  方向(近づいてくる側): front=坂の上 / back=坂の下 / left / right / random");
-        s.sendMessage("§7  省略時: 敵=front、味方=back。出現位置はプレイヤーから10マス離れたランダムな場所");
+        s.sendMessage("§e/" + l + " enemy <mob> [数] §7- 敵を坂の上側に召喚（押す力・時間・速さ・必中は config.yml の enemy-mobs で設定）");
+        s.sendMessage("§e/" + l + " ally <mob> [数] §7- 味方を坂の下側に召喚（config.yml の ally-mobs で設定）");
+        s.sendMessage("§e/" + l + " buff <enemy|ally|off> §7- 敵/味方を強化（味方=坂の左半分が氷、敵=右半分がソウルサンド）");
+        s.sendMessage("§7  mob は縦一列にはまっすぐ進まず、斜めに進んで壁で跳ね返ります。出現位置はプレイヤーから10マス離れたランダムな場所");
         s.sendMessage("§e/" + l + " clear [enemy|ally] §7- mob を削除");
         s.sendMessage("§e/" + l + " remove §7- コースを元に戻す");
         s.sendMessage("§e/" + l + " info / reload");
-        s.sendMessage("§7※ 押す力を省略すると、押す秒数（四捨五入）と同じ値になります。");
     }
 
     private void create(CommandSender sender, String[] a) {
@@ -124,8 +124,8 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
     }
 
     private void spawn(CommandSender sender, String[] a, GameManager.Role role, String label) {
-        if (a.length < 3) {
-            sender.sendMessage("§c使い方: /" + label + " " + a[0] + " <mob> <秒数> [押す力] [数] [方向] [プレイヤー]");
+        if (a.length < 2) {
+            sender.sendMessage("§c使い方: /" + label + " " + a[0] + " <mob> [数]");
             return;
         }
         MobSpec spec = game.resolveSpec(a[1], role);
@@ -133,40 +133,32 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage("§c使用できない mob です。許可: " + String.join(", ", game.allowedMobs(role)));
             return;
         }
-        Double secs = parseDouble(a[2]);
-        if (secs == null || secs < 0.5 || secs > 120) {
-            sender.sendMessage("§c押す時間は 0.5〜120（秒）で指定してください。");
-            return;
-        }
-        Integer power = a.length > 3 ? parseInt(a[3]) : (int) Math.round(secs);
-        if (power == null || power < 0 || power > 100000) {
-            sender.sendMessage("§c押す力は 0 以上の整数で指定してください。");
-            return;
-        }
-        Integer count = a.length > 4 ? parseInt(a[4]) : 1;
-        if (count == null || count < 1 || count > 20) {
-            sender.sendMessage("§c数は 1〜20 で指定してください。");
-            return;
-        }
-        GameManager.Side side = null;
-        if (a.length > 5) {
-            side = GameManager.Side.parse(a[5]);
-            if (side == null) {
-                sender.sendMessage("§c方向は front / back / left / right / random のいずれかで指定してください。");
+        int count = 1;
+        if (a.length > 2) {
+            Integer v = parseInt(a[2]);
+            if (v == null || v < 1 || v > 20) {
+                sender.sendMessage("§c数は 1〜20 で指定してください: " + a[2]);
                 return;
             }
+            count = v;
         }
-        Player anchor = null;
-        if (a.length > 6) {
-            anchor = Bukkit.getPlayerExact(a[6]);
-            if (anchor == null) {
-                sender.sendMessage("§cプレイヤーが見つかりません: " + a[6]);
-                return;
-            }
-        } else if (sender instanceof Player p) {
-            anchor = p;
+        Player anchor = sender instanceof Player sp ? sp : null;
+        sender.sendMessage("§a" + game.spawn(role, spec, count, anchor));
+    }
+
+    private void buff(CommandSender sender, String[] a) {
+        if (a.length < 2) {
+            sender.sendMessage("§c使い方: /koth buff <enemy|ally|off>");
+            return;
         }
-        sender.sendMessage("§a" + game.spawn(role, spec, secs, power, count, side, anchor));
+        String err;
+        switch (a[1].toLowerCase(Locale.ROOT)) {
+            case "enemy" -> err = game.buff(GameManager.Role.ENEMY);
+            case "ally" -> err = game.buff(GameManager.Role.ALLY);
+            case "off" -> err = game.buffOff();
+            default -> err = "enemy / ally / off のいずれかを指定してください。";
+        }
+        if (err != null) sender.sendMessage("§c" + err);
     }
 
     private void info(CommandSender s) {
@@ -178,6 +170,14 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
         s.sendMessage("§6ワールド: §f" + c.world.getName() + " §6方向: §f" + c.dir + " §6幅: §f" + Course.WIDTH + " §6長さ: §f" + c.length
                 + " §6頂上Y: §f" + (c.baseY + c.height) + " §6状態: §f" + (c.ready ? "完成" : "生成中")
                 + " §6mob数: §f" + game.mobCount());
+    }
+
+    private static Boolean parseBool(String s) {
+        return switch (s.toLowerCase(Locale.ROOT)) {
+            case "true", "on", "yes", "1" -> Boolean.TRUE;
+            case "false", "off", "no", "0" -> Boolean.FALSE;
+            default -> null;
+        };
     }
 
     private static Double parseDouble(String s) {
@@ -201,12 +201,13 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
     public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] a) {
         List<String> out = new ArrayList<>();
         if (a.length == 1) {
-            out.addAll(List.of("create", "material", "enemy", "ally", "clear", "remove", "info", "reload", "help"));
+            out.addAll(List.of("create", "material", "enemy", "ally", "buff", "clear", "remove", "info", "reload", "help"));
         } else if (a.length == 2) {
             switch (a[0].toLowerCase(Locale.ROOT)) {
                 case "enemy" -> out.addAll(game.allowedMobs(GameManager.Role.ENEMY));
                 case "ally" -> out.addAll(game.allowedMobs(GameManager.Role.ALLY));
                 case "clear" -> out.addAll(List.of("enemy", "ally"));
+                case "buff" -> out.addAll(List.of("enemy", "ally", "off"));
                 case "create" -> out.addAll(List.of("20", "50", "100"));
                 case "material" -> out.addAll(List.of("stair", "block", "fill", "pad", "goal", "wall"));
                 default -> { }
@@ -219,10 +220,6 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
             out.addAll(game.suggestMaterials(a[1].toLowerCase(Locale.ROOT), a[2]));
         } else if (a.length == 3 && (a[0].equalsIgnoreCase("enemy") || a[0].equalsIgnoreCase("ally"))) {
             out.addAll(List.of("1", "3", "5", "10"));
-        } else if (a.length == 6 && (a[0].equalsIgnoreCase("enemy") || a[0].equalsIgnoreCase("ally"))) {
-            out.addAll(List.of("front", "back", "left", "right", "random"));
-        } else if (a.length == 7 && (a[0].equalsIgnoreCase("enemy") || a[0].equalsIgnoreCase("ally"))) {
-            for (Player p : Bukkit.getOnlinePlayers()) out.add(p.getName());
         }
         String last = a[a.length - 1].toLowerCase(Locale.ROOT);
         out.removeIf(s -> !s.toLowerCase(Locale.ROOT).startsWith(last));
