@@ -58,7 +58,7 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
 
     private void help(CommandSender s, String l) {
         s.sendMessage("§6=== KOTH (SlopeClimb) ===");
-        s.sendMessage("§e/" + l + " create <長さ> §7- 今向いている方向に幅3の坂を生成");
+        s.sendMessage("§e/" + l + " create <長さ> §7- 今向いている方向に幅3の坂を生成（階段+ブロックの2マスで1段、両脇バリア）");
         s.sendMessage("§e/" + l + " enemy <mob> <押し戻す距離> [押す力] [数] [プレイヤー] §7- 敵を前方に召喚");
         s.sendMessage("§e/" + l + " ally <mob> <押す距離> [押す力] [数] [プレイヤー] §7- 味方を後方に召喚");
         s.sendMessage("§e/" + l + " clear [enemy|ally] §7- mob を削除");
@@ -78,8 +78,8 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
         }
         Integer len = parseInt(a[1]);
         int max = plugin.getConfig().getInt("max-length", 200);
-        if (len == null || len < 3 || len > max) {
-            sender.sendMessage("§c長さは 3〜" + max + " の整数で指定してください。");
+        if (len == null || len < 4 || len > max) {
+            sender.sendMessage("§c長さは 4〜" + max + " の整数で指定してください（奇数は偶数に切り上げ）。");
             return;
         }
         String err = game.create(p, len);
@@ -131,7 +131,7 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
             return;
         }
         s.sendMessage("§6ワールド: §f" + c.world.getName() + " §6方向: §f" + c.dir + " §6長さ: §f" + c.length
-                + " §6頂上Y: §f" + (c.baseY + c.length) + " §6状態: §f" + (c.ready ? "完成" : "生成中")
+                + " §6頂上Y: §f" + (c.baseY + c.height) + " §6状態: §f" + (c.ready ? "完成" : "生成中")
                 + " §6mob数: §f" + game.mobCount());
     }
 

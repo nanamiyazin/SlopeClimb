@@ -8,6 +8,7 @@ import org.bukkit.FireworkEffect;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Particle;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Registry;
 import org.bukkit.Sound;
@@ -52,7 +53,16 @@ public final class GameManager {
     private static final class Push {
         final double targetT;
         final double speed;
-        Push(double targetT, double speed) { this.targetT = targetT; this.speed = speed; }
+        final boolean back;
+        final int totalBlocks;
+        double moved = 0;
+        int played = 0;
+        Push(double targetT, double speed, boolean back, int totalBlocks) {
+            this.targetT = targetT;
+            this.speed = speed;
+            this.back = back;
+            this.totalBlocks = totalBlocks;
+        }
     }
 
     private static final double[] LANES = {0, -1, 1};
@@ -67,6 +77,7 @@ public final class GameManager {
     private final Map<UUID, Push> pushes = new HashMap<>();
     private final Map<UUID, Long> immuneUntil = new HashMap<>();
     private final Map<UUID, Long> startTimes = new HashMap<>();
+    private final Map<UUID, Long> holdSince = new HashMap<>();
     private final Set<UUID> finished = new HashSet<>();
 
     public GameManager(SlopeClimbPlugin plugin) {
@@ -115,9 +126,12 @@ public final class GameManager {
     }
 
     /** @return エラーメッセージ。成功時は null */
-    public String create(Player creator, int length) {
+    public String create(Player creator, int requested) {
         if (busy) return "処理中です。しばらく待ってください。";
         if (course != null) return "既にコースがあります。先に /koth remove を実行してください。";
+
+        int length = requested + (requested % 2);   // 階段+ブロックの2マス単位なので偶数に切り上げ
+        int height = length / 2;
 
         Location pl = creator.getLocation();
         BlockFace dir = facingOf(pl.getYaw());
@@ -125,7 +139,7 @@ public final class GameManager {
         int x0 = pl.getBlockX() + dir.getModX();
         int z0 = pl.getBlockZ() + dir.getModZ();
 
-        if (baseY + length + 6 >= pl.getWorld().getMaxHeight()) {
+        if (baseY + height + Course.WALL_HEIGHT + 4 >= pl.getWorld().getMaxHeight()) {
             return "高さ制限を超えます。長さを短くするか、低い場所で実行してください。";
         }
         if (baseY - 2 <= pl.getWorld().getMinHeight()) {
@@ -137,6 +151,7 @@ public final class GameManager {
         BlockData stair = material("stair", Material.STONE_BRICK_STAIRS).createBlockData();
         if (stair instanceof Directional d) d.setFacing(dir);
         if (stair instanceof Bisected b) b.setHalf(Bisected.Half.BOTTOM);
+        BlockData block = material("block", Material.STONE_BRICKS).createBlockData();
         BlockData fill = material("fill", Material.STONE_BRICKS).createBlockData();
         BlockData pad = material("pad", Material.SMOOTH_STONE).createBlockData();
         BlockData goal = material("goal", Material.GOLD_BLOCK).createBlockData();
@@ -144,12 +159,13 @@ public final class GameManager {
         course = c;
         busy = true;
         creator.sendMessage(Component.text("コースを生成中...", NamedTextColor.YELLOW));
-        runBatched(c.buildJobs(stair, fill, pad, goal).iterator(), () -> {
+        runBatched(c.buildJobs(stair, block, fill, pad, goal).iterator(), () -> {
             c.ready = true;
             busy = false;
             if (creator.isOnline()) {
                 creator.sendMessage(Component.text("コース完成！ 方向=" + dir + " / 長さ=" + length
-                        + "マス / 頂上の高さ Y=" + (c.baseY + length), NamedTextColor.GREEN));
+                        + "マス（" + height + "段）/ 頂上の高さ Y=" + (c.baseY + height)
+                        + (requested != length ? " ※奇数のため偶数に切り上げました" : ""), NamedTextColor.GREEN));
             }
         });
         return null;
@@ -163,6 +179,7 @@ public final class GameManager {
         pushes.clear();
         startTimes.clear();
         finished.clear();
+        holdSince.clear();
         c.ready = false;
         busy = true;
         runBatched(c.restoreJobs().iterator(), () -> {
@@ -361,6 +378,7 @@ public final class GameManager {
                 UUID id = p.getUniqueId();
                 startTimes.remove(id);
                 finished.remove(id);
+                holdSince.remove(id);
                 pushes.remove(id);
             }
         }
@@ -405,13 +423,30 @@ public final class GameManager {
         Location loc = p.getLocation();
         double t = c.t(loc);
 
-        // 頂上判定
-        if (c.onSummit(loc)) {
-            if (finished.add(id)) win(c, p);
-        } else if (t < c.length - 1) {
-            finished.remove(id);
-        }
         if (t >= 0) startTimes.putIfAbsent(id, System.currentTimeMillis());
+
+        // 頂上キープ判定（頂上の台に一定時間とどまれば勝ち）
+        long holdTicks = Math.round(cfg().getDouble("summit-hold-seconds", 15.0) * 20);
+        if (c.onSummit(loc)) {
+            if (!finished.contains(id)) {
+                long since = holdSince.computeIfAbsent(id, k -> tick);
+                long elapsed = tick - since;
+                if (elapsed >= holdTicks) {
+                    finished.add(id);
+                    holdSince.remove(id);
+                    win(c, p);
+                } else if (elapsed % 20 == 0) {
+                    long remain = (holdTicks - elapsed + 19) / 20;
+                    p.sendActionBar(Component.text("頂上キープ中！ あと " + remain + " 秒", NamedTextColor.GOLD));
+                    p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.8f, 1.5f);
+                }
+            }
+        } else {
+            if (holdSince.remove(id) != null) {
+                p.sendActionBar(Component.text("頂上から離れた！ カウントリセット", NamedTextColor.RED));
+            }
+            if (t < c.length - 1) finished.remove(id);
+        }
 
         // 押し出し中
         Push push = pushes.get(id);
@@ -425,6 +460,7 @@ public final class GameManager {
         // 接触判定
         double range = cfg().getDouble("contact-range", 0.25);
         BoundingBox pb = p.getBoundingBox().clone().expand(range);
+        List<Entity> touching = new ArrayList<>();
         int enemyPower = -1, enemyDist = 0, allyPower = -1, allyDist = 0;
         for (Entity ent : p.getNearbyEntities(6, 6, 6)) {
             MobInfo mi = mobs.get(ent.getUniqueId());
@@ -439,13 +475,14 @@ public final class GameManager {
                 hit = pb.overlaps(ent.getBoundingBox());
             }
             if (!hit) continue;
+            touching.add(ent);
             if (mi.role() == Role.ENEMY) {
                 if (mi.power() > enemyPower) { enemyPower = mi.power(); enemyDist = mi.distance(); }
             } else {
                 if (mi.power() > allyPower) { allyPower = mi.power(); allyDist = mi.distance(); }
             }
         }
-        if (enemyPower < 0 && allyPower < 0) return;
+        if (touching.isEmpty()) return;
 
         boolean back;
         int dist;
@@ -456,8 +493,9 @@ public final class GameManager {
             back = false;
             dist = allyDist;
         } else {
-            // 力が同じ → 押し合い互角
+            // 力が同じ → 押し合い互角（接触した mob は消える）
             p.sendActionBar(Component.text("押し合い互角！", NamedTextColor.YELLOW));
+            consume(touching);
             immuneUntil.put(id, tick + 20);
             return;
         }
@@ -465,18 +503,37 @@ public final class GameManager {
         double target = back
                 ? Math.max(-0.5, t - dist)
                 : Math.min(c.length + 1.5, t + dist);
+        consume(touching);   // 接触した mob は一度で消滅
         if (Math.abs(target - t) < 0.01) {
             immuneUntil.put(id, tick + 20);
             return;
         }
 
-        pushes.put(id, new Push(target, cfg().getDouble("push-speed", 1.0)));
+        int blocks = Math.max(1, (int) Math.round(Math.abs(target - t)));
+        pushes.put(id, new Push(target, cfg().getDouble("push-speed", 0.25), back, blocks));
         if (back) {
-            p.sendActionBar(Component.text("敵に " + dist + " マス押し戻された！", NamedTextColor.RED));
-            p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_ATTACK_KNOCKBACK, 1f, 0.8f);
+            p.sendActionBar(Component.text("敵に " + blocks + " マス押し戻される！", NamedTextColor.RED));
         } else {
-            p.sendActionBar(Component.text("味方に " + dist + " マス押してもらった！", NamedTextColor.GREEN));
-            p.playSound(p.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1f, 1.2f);
+            p.sendActionBar(Component.text("味方が " + blocks + " マス押してくれる！", NamedTextColor.GREEN));
+        }
+    }
+
+    /** 接触した mob を消す */
+    private void consume(List<Entity> list) {
+        for (Entity e : list) {
+            mobs.remove(e.getUniqueId());
+            Location l = e.getLocation().add(0, e.getHeight() / 2, 0);
+            e.getWorld().spawnParticle(Particle.POOF, l, 12, 0.3, 0.3, 0.3, 0.02);
+            e.remove();
+        }
+    }
+
+    /** 押された距離（1マスごと）に合わせて効果音を鳴らす */
+    private void pushSound(Player p, Push push) {
+        if (push.back) {
+            p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_BASS, 1f, 0.6f);
+        } else {
+            p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 1f, Math.min(2f, 0.8f + 0.1f * push.played));
         }
     }
 
@@ -496,7 +553,19 @@ public final class GameManager {
         p.teleport(dest);
         p.setFallDistance(0f);
 
+        // 1マス進むごとに効果音
+        push.moved += step;
+        int should = (int) Math.floor(push.moved + 1e-6);
+        while (push.played < should && push.played < push.totalBlocks) {
+            push.played++;
+            pushSound(p, push);
+        }
+
         if (Math.abs(push.targetT - nt) < 0.01) {
+            while (push.played < push.totalBlocks) {
+                push.played++;
+                pushSound(p, push);
+            }
             pushes.remove(id);
             immuneUntil.put(id, tick + cfg().getLong("push-cooldown-ticks", 30L));
         }
