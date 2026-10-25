@@ -1,5 +1,5 @@
 name: SlopeClimb
-version: 1.10.1
+version: 1.10.2
 main: com.example.slopeclimb.SlopeClimbPlugin
 api-version: '26.1.2'
 description: King of the hill style slope climbing game with enemy and ally pushing mobs
