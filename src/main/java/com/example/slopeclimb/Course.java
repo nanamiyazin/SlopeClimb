@@ -14,16 +14,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 幅6マスの坂コース（両脇にバリアブロックの壁つき）。
- * 水平2マス（階段 + ブロック）で1段上がる。
- * コース座標: t = 進行方向の距離(坂の入口が0)、s = 横方向のずれ(中心線が0、-3〜3が坂の上)。
+ * 幅6マスのまっすぐな平らな道（両脇にバリアブロックの壁つき）。
+ * コース座標: t = 進行方向の距離(スタート側の入口が0)、s = 横方向のずれ(中心線が0、-3〜3が道の上)。
  */
 public final class Course {
 
     public static final int PAD = 3;          // スタート台の長さ
-    public static final int PLATFORM = 3;     // 頂上台の長さ
+    public static final int PLATFORM = 3;     // ゴールの台の長さ
     public static final int WALL_HEIGHT = 4;  // バリアの高さ
-    public static final int WIDTH = 6;        // 坂の幅
+    public static final int WIDTH = 6;        // 道の幅
     public static final double HALF_W = WIDTH / 2.0;
     public static final double MOB_S = HALF_W - 0.6;     // mob が動ける横幅の限界
     public static final double PLAYER_S = HALF_W - 0.1;  // 押し出し中にプレイヤーが寄れる横幅の限界
@@ -32,16 +31,16 @@ public final class Course {
 
     public final World world;
     public final int baseY;
-    public final int length;   // 水平方向の長さ（偶数）
-    public final int height;   // 登る高さ = length / 2
+    public final int length;   // 道の長さ（マス）
+    public final int height = 0; // 平らな道なので高さの差はない
     public final BlockFace dir;
     public final int dx, dz;   // 進行方向
     public final int lx, lz;   // 横方向
-    public final double ox, oz; // 坂入口の原点（横方向はブロックの境目＝中心線）
+    public final double ox, oz; // 道の入口の原点（横方向はブロックの境目＝中心線）
     public boolean ready = false;
 
     private final Map<Long, Backup> backups = new LinkedHashMap<>();
-    private BlockData blockData;   // 階段の次の1マスに使っているブロック（強化が終わったときに戻す）
+    private BlockData blockData;   // 道の床に使っているブロック（強化が終わったときに戻す）
     private static final BlockData AIR = Bukkit.createBlockData(Material.AIR);
     private static final BlockData BARRIER = Bukkit.createBlockData(Material.BARRIER);
 
@@ -49,7 +48,6 @@ public final class Course {
         this.world = world;
         this.baseY = baseY;
         this.length = length;
-        this.height = length / 2;
         this.dir = dir;
         this.dx = dir.getModX();
         this.dz = dir.getModZ();
@@ -73,13 +71,9 @@ public final class Course {
         return (l.getX() - ox) * lx + (l.getZ() - oz) * lz;
     }
 
-    /** 坂の表面の高さ(足を置ける高さ)。階段(2マス1段): 階段の前半=+0.5、後半とブロック=+1.0 */
+    /** 道の表面の高さ(足を置ける高さ)。平らなので常に baseY */
     public double surfaceY(double t) {
-        if (t < 0) return baseY;
-        if (t >= length) return baseY + height;
-        int k = (int) Math.floor(t / 2.0);
-        double f = t - 2.0 * k;
-        return baseY + k + (f < 0.5 ? 0.5 : 1.0);
+        return baseY;
     }
 
     public Location at(double t, double s) {
@@ -115,15 +109,13 @@ public final class Course {
         b.setBlockData(data, false);
     }
 
-    /** 列 k の足場ブロックを置く高さ */
+    /** 列 k の床ブロックを置く高さ（平らなので常に baseY - 1） */
     private int layerY(int k) {
-        if (k < 0) return baseY - 1;
-        if (k < length) return baseY + k / 2;
-        return baseY + height - 1;
+        return baseY - 1;
     }
 
     /** jj = -4..3（-4 と 3 が両脇のバリア、-3..2 が坂の6列） */
-    private void buildColumn(int k, int jj, BlockData stair, BlockData block, BlockData fill,
+    private void buildColumn(int k, int jj, BlockData block, BlockData fill,
                              BlockData pad, BlockData goal, BlockData wall) {
         double off = jj + 0.5;
         double cx = ox + dx * (k + 0.5) + lx * off;
@@ -131,7 +123,7 @@ public final class Course {
         int x = (int) Math.floor(cx);
         int z = (int) Math.floor(cz);
 
-        // 一番下の壁（敵に押し付けられる壁）
+        // スタート地点の壁（敵に押し付けられる壁）
         if (k == -PAD - 1) {
             for (int i = -1; i < WALL_HEIGHT; i++) set(x, baseY + i, z, wall);
             for (int y = baseY - 2; y > baseY - 66 && y >= world.getMinHeight(); y--) {
@@ -141,7 +133,7 @@ public final class Course {
             return;
         }
 
-        // 頂上台の先の行き止まりの壁
+        // ゴールの台の先の行き止まりの壁
         if (k == length + PLATFORM) {
             for (int i = 0; i < WALL_HEIGHT; i++) set(x, baseY + height + i, z, BARRIER);
             return;
@@ -149,7 +141,7 @@ public final class Course {
 
         // 両脇のバリア
         if (Math.abs(off) > HALF_W) {
-            int start = layerY(k) + ((k >= 0 && k < length) ? 0 : 1);
+            int start = layerY(k) + 1;
             for (int i = 0; i < WALL_HEIGHT; i++) set(x, start + i, z, BARRIER);
             return;
         }
@@ -159,7 +151,7 @@ public final class Course {
         if (k < 0) {
             top = pad;
         } else if (k < length) {
-            top = (k % 2 == 0) ? stair : block;   // 偶数列=階段、奇数列=ブロック
+            top = block;
         } else {
             top = goal;
         }
@@ -180,14 +172,14 @@ public final class Course {
         }
     }
 
-    public List<Runnable> buildJobs(BlockData stair, BlockData block, BlockData fill,
+    public List<Runnable> buildJobs(BlockData block, BlockData fill,
                                     BlockData pad, BlockData goal, BlockData wall) {
         this.blockData = block;
         List<Runnable> jobs = new ArrayList<>();
         for (int k = -PAD - 1; k <= length + PLATFORM; k++) {
             for (int jj = -4; jj <= 3; jj++) {
                 final int fk = k, fj = jj;
-                jobs.add(() -> buildColumn(fk, fj, stair, block, fill, pad, goal, wall));
+                jobs.add(() -> buildColumn(fk, fj, block, fill, pad, goal, wall));
             }
         }
         return jobs;
@@ -196,11 +188,11 @@ public final class Course {
     public BlockData blockData() { return blockData; }
 
     /**
-     * 坂の縦半分（進行方向に向かって左半分 or 右半分）の「ブロック列」を指定のブロックに置き換える。
-     * 階段の列はそのまま（階段には氷やソウルサンドがないため）。元に戻すときは blockData() を渡す。
+     * 道の縦半分（進行方向に向かって左半分 or 右半分）の床を指定のブロックに置き換える。
+     * 元に戻すときは blockData() を渡す。
      */
     public void setHalf(boolean left, BlockData data) {
-        for (int k = 1; k < length; k += 2) {
+        for (int k = 0; k < length; k++) {
             for (int jj = left ? -3 : 0; jj <= (left ? -1 : 2); jj++) {
                 double off = jj + 0.5;
                 int x = (int) Math.floor(ox + dx * (k + 0.5) + lx * off);

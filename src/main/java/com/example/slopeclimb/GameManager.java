@@ -16,10 +16,7 @@ import org.bukkit.Sound;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.block.BlockFace;
-import org.bukkit.block.data.Bisected;
 import org.bukkit.block.data.BlockData;
-import org.bukkit.block.data.Directional;
-import org.bukkit.block.data.type.Stairs;
 import org.bukkit.boss.BossBar;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -244,9 +241,6 @@ public final class GameManager {
     public Material parseMaterial(String kind, String name) {
         Material m = Material.matchMaterial(name);
         if (m == null || m.isLegacy() || !m.isBlock()) return null;
-        if (kind.equals("stair")) {
-            return (m.createBlockData() instanceof Stairs) ? m : null;
-        }
         return (m.isSolid() && m.isOccluding() && !m.hasGravity()) ? m : null;
     }
 
@@ -265,14 +259,12 @@ public final class GameManager {
 
     /** 素材設定を config.yml に保存する。@return エラーメッセージ。成功時は null */
     public String setMaterial(String kind, String name) {
-        if (!List.of("stair", "block", "fill", "pad", "goal", "wall").contains(kind)) {
-            return "種類は stair / block / fill / pad / goal / wall のいずれかです。";
+        if (!List.of("floor", "fill", "pad", "goal", "wall").contains(kind)) {
+            return "種類は floor / fill / pad / goal / wall のいずれかです。";
         }
         Material m = parseMaterial(kind, name);
         if (m == null) {
-            return kind.equals("stair")
-                    ? "階段ブロックを指定してください（例: stone_brick_stairs）。"
-                    : "使えない素材です。落下せず、完全な立方体のブロックを指定してください。";
+            return "使えない素材です。落下せず、完全な立方体のブロックを指定してください。";
         }
         cfg().set("materials." + kind, m.name());
         plugin.saveConfig();
@@ -280,12 +272,9 @@ public final class GameManager {
     }
 
     /** @return エラーメッセージ。成功時は null */
-    public String create(Player creator, int requested, Material stairMat, Material blockMat) {
+    public String create(Player creator, int length, Material floorMat) {
         if (busy) return "処理中です。しばらく待ってください。";
         if (course != null) return "既にコースがあります。先に /koth remove を実行してください。";
-
-        int length = requested + (requested % 2);   // 階段+ブロックの2マス単位なので偶数に切り上げ
-        int height = length / 2;
 
         Location pl = creator.getLocation();
         BlockFace dir = facingOf(pl.getYaw());
@@ -293,8 +282,8 @@ public final class GameManager {
         int x0 = pl.getBlockX() + dir.getModX();
         int z0 = pl.getBlockZ() + dir.getModZ();
 
-        if (baseY + height + Course.WALL_HEIGHT + 4 >= pl.getWorld().getMaxHeight()) {
-            return "高さ制限を超えます。長さを短くするか、低い場所で実行してください。";
+        if (baseY + Course.WALL_HEIGHT + 4 >= pl.getWorld().getMaxHeight()) {
+            return "高さ制限を超えます。低い場所で実行してください。";
         }
         if (baseY - 2 <= pl.getWorld().getMinHeight()) {
             return "低すぎる場所です。";
@@ -302,10 +291,7 @@ public final class GameManager {
 
         Course c = new Course(pl.getWorld(), x0, baseY, z0, dir, length);
 
-        BlockData stair = (stairMat != null ? stairMat : material("stair", Material.STONE_BRICK_STAIRS)).createBlockData();
-        if (stair instanceof Directional d) d.setFacing(dir);
-        if (stair instanceof Bisected b) b.setHalf(Bisected.Half.BOTTOM);
-        BlockData block = (blockMat != null ? blockMat : material("block", Material.STONE_BRICKS)).createBlockData();
+        BlockData floor = (floorMat != null ? floorMat : material("floor", Material.STONE_BRICKS)).createBlockData();
         BlockData fill = material("fill", Material.STONE_BRICKS).createBlockData();
         BlockData pad = material("pad", Material.SMOOTH_STONE).createBlockData();
         BlockData goal = material("goal", Material.GOLD_BLOCK).createBlockData();
@@ -314,13 +300,12 @@ public final class GameManager {
         course = c;
         busy = true;
         creator.sendMessage(Component.text("コースを生成中...", NamedTextColor.YELLOW));
-        runBatched(c.buildJobs(stair, block, fill, pad, goal, wall).iterator(), () -> {
+        runBatched(c.buildJobs(floor, fill, pad, goal, wall).iterator(), () -> {
             c.ready = true;
             busy = false;
             if (creator.isOnline()) {
                 creator.sendMessage(Component.text("コース完成！ 方向=" + dir + " / 幅=" + Course.WIDTH
-                        + " / 長さ=" + length + "マス（" + height + "段）/ 頂上の高さ Y=" + (c.baseY + height)
-                        + (requested != length ? " ※奇数のため偶数に切り上げました" : ""), NamedTextColor.GREEN));
+                        + " / 長さ=" + length + "マス（奥がゴール）", NamedTextColor.GREEN));
             }
         });
         return null;
@@ -414,7 +399,7 @@ public final class GameManager {
             List<Player> ps = participants(c);
             if (!ps.isEmpty()) ap = ps.get(0);
         }
-        if (ap == null) return "コース上にプレイヤーがいません。坂の上に立ってから実行してください。";
+        if (ap == null) return "コース上にプレイヤーがいません。コースの上に立ってから実行してください。";
 
         double pt = c.t(ap.getLocation());
         double psS = clamp(c.s(ap.getLocation()), -Course.PLAYER_S, Course.PLAYER_S);
@@ -422,7 +407,7 @@ public final class GameManager {
         boolean intro = spec.intro() && cfg().getBoolean("intro.enabled", true)
                 && !cinematics.containsKey(ap.getUniqueId());
         double dist = intro ? cfg().getDouble("intro.distance", 30.0) : cfg().getDouble("spawn-distance", 10.0);
-        boolean front = role == Role.ENEMY;   // 敵は坂の上から、味方は坂の下から近づく
+        boolean front = role == Role.ENEMY;   // 敵はゴール側から、味方はスタート側から近づく
         // 押す時間・押す力・速さ・必中は config の mob 設定から読む
         double seconds = mobDouble(role, spec, "seconds", 2.0);
         int power = (int) Math.round(mobDouble(role, spec, "power", 5));
@@ -566,7 +551,7 @@ public final class GameManager {
             buffBars.put(role, bar);
             for (Player p : c.world.getPlayers()) p.showBossBar(bar);
             Bukkit.broadcast(Component.text("⚡ " + name + "の mob が強化された！（" + (len / 20) + "秒）"
-                    + (role == Role.ENEMY ? " 坂の右半分がソウルサンドに" : " 坂の左半分が氷に"),
+                    + (role == Role.ENEMY ? " 道の右半分がソウルサンドに" : " 道の左半分が氷に"),
                     role == Role.ENEMY ? NamedTextColor.RED : NamedTextColor.GREEN));
         } else {
             Bukkit.broadcast(Component.text("⚡ " + name + "の強化を延長！（" + (len / 20) + "秒）",
@@ -831,7 +816,7 @@ public final class GameManager {
 
         if (t >= 0) startTimes.putIfAbsent(id, System.currentTimeMillis());
 
-        // 頂上キープ判定（頂上の台に一定時間とどまれば勝ち）
+        // ゴールキープ判定（ゴールの台に一定時間とどまれば勝ち）
         long holdTicks = Math.round(cfg().getDouble("summit-hold-seconds", 15.0) * 20);
         if (c.onSummit(loc)) {
             if (!finished.contains(id)) {
@@ -844,13 +829,13 @@ public final class GameManager {
                     return;
                 } else if (elapsed % 20 == 0) {
                     long remain = (holdTicks - elapsed + 19) / 20;
-                    p.sendActionBar(Component.text("頂上キープ中！ あと " + remain + " 秒", NamedTextColor.GOLD));
+                    p.sendActionBar(Component.text("ゴールキープ中！ あと " + remain + " 秒", NamedTextColor.GOLD));
                     p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.8f, 1.5f);
                 }
             }
         } else {
             if (holdSince.remove(id) != null) {
-                p.sendActionBar(Component.text("頂上から離れた！ カウントリセット", NamedTextColor.RED));
+                p.sendActionBar(Component.text("ゴールから離れた！ カウントリセット", NamedTextColor.RED));
             }
             if (t < c.length - 1) finished.remove(id);
         }
@@ -1218,7 +1203,7 @@ public final class GameManager {
             double sec = (System.currentTimeMillis() - start) / 1000.0;
             time = String.format(Locale.ROOT, "（タイム %.1f 秒）", sec);
         }
-        Bukkit.broadcast(Component.text("★ " + p.getName() + " が頂上を守りきって勝利！" + time, NamedTextColor.GOLD));
+        Bukkit.broadcast(Component.text("★ " + p.getName() + " がゴールを守りきって勝利！" + time, NamedTextColor.GOLD));
         p.playSound(p.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1f, 1f);
 
         Location l = c.at(c.length + 1.5, 0);
@@ -1233,7 +1218,7 @@ public final class GameManager {
             fw.setFireworkMeta(m);
         });
 
-        // 一番下（スタート台）へテレポート
+        // スタート台へテレポート
         endPush(id);
         holdSince.remove(id);
         startTimes.remove(id);

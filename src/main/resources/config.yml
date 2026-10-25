@@ -1,10 +1,10 @@
-# コースの最大の長さ（水平方向のマス数。階段+ブロックの2マスで1段上がる）
+# 道の最大の長さ（マス）
 max-length: 200
 
 # mob をプレイヤーから何マス離れた場所（ランダム）に出すか
 spawn-distance: 10
 
-# mob が縦一列にまっすぐ進まないための、坂の進行方向からの最低の傾き（度）。
+# mob が道の縦一列にまっすぐ進まないための、道の進行方向からの最低の傾き（度）。
 # 小さいほど縦長の動き、大きいほど横に大きく振れる。壁にぶつかると跳ね返る
 mob-min-angle: 25
 
@@ -18,7 +18,7 @@ contact-range: 0.25
 # mob の押す時間（秒）× この速度 × 20 が、押される総距離になる
 push-speed: 0.25
 
-# 頂上の台にとどまれば勝ちになる秒数
+# ゴールの台にとどまれば勝ちになる秒数
 summit-hold-seconds: 15
 
 # 押された後、次に押されるまでの無敵時間（tick）
@@ -110,9 +110,9 @@ ally-mobs:
     seconds: 3.0
     power: 15
 
-# /koth buff <enemy|ally> による強化。強化中は坂の縦半分のブロックが変わる
-#   味方の強化 → 坂の左半分（進行方向に向かって左）が氷ブロックに
-#   敵の強化   → 坂の右半分が ソウルサンドに
+# /koth buff <enemy|ally> による強化。強化中は道の縦半分の床が変わる
+#   味方の強化 → 道の左半分（進行方向に向かって左）が氷ブロックに
+#   敵の強化   → 道の右半分が ソウルサンドに
 # 強化中は、その側の mob の押す力・押す時間・速度が倍率の分だけ上がる
 buff:
   duration-seconds: 30
@@ -133,7 +133,7 @@ intro:
   distance: 30      # 出現する距離（マス）
   max-ticks: 200    # 演出の最大の長さ（tick、20tick=1秒）。ボスが近づくと自動で終わる
 
-# 一番下の壁に敵に押し付けられたときのダメージゲージ
+# スタート地点の壁に敵に押し付けられたときのダメージゲージ
 wall-damage:
   enabled: true
   gauge-max: 100          # ゲージの最大値
@@ -141,11 +141,10 @@ wall-damage:
   regen-per-second: 0     # 1秒ごとの自然回復量（0 = 回復しない）
   kill-on-zero: false     # true にするとゲージが尽きたときプレイヤーが死亡する
 
-# コースのブロック（/koth material <種類> <素材> でも変更できる）
+# 道のブロック（/koth material <種類> <素材> でも変更できる）
 materials:
-  stair: STONE_BRICK_STAIRS   # 坂の階段（階段ブロックであること）
-  block: STONE_BRICKS         # 階段の次の1マス（ブロック）
-  fill: STONE_BRICKS          # 坂の下の埋め草
+  floor: STONE_BRICKS         # 道の床
+  fill: STONE_BRICKS          # 道の下の埋め草
   pad: SMOOTH_STONE           # スタート台
-  goal: GOLD_BLOCK            # 頂上の台
-  wall: STONE_BRICKS          # 一番下の壁（敵に押し付けられる壁）
+  goal: GOLD_BLOCK            # ゴールの台
+  wall: STONE_BRICKS          # スタート地点の壁（敵に押し付けられる壁）
