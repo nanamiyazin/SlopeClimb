@@ -225,7 +225,6 @@ public final class GameManager {
 
     /** mob を動かす。トロッコに乗っていれば、乗せたままトロッコごと動かす */
     private void moveMob(LivingEntity le, Location dest) {
-        if (le instanceof org.bukkit.entity.EnderDragon dr) dr.setPhase(org.bukkit.entity.EnderDragon.Phase.HOVER);
         internalMove = true;
         try {
             Entity cart = cartOf(le.getUniqueId());
@@ -440,10 +439,10 @@ public final class GameManager {
     // ---------- Mob ----------
 
     /** プレイヤーの (t, s) から dist マス離れたランダムな地点 {t, s}（敵=坂の上側、味方=坂の下側） */
-    private double[] spawnPoint(Course c, double pt, double ps, boolean front, double dist, boolean free) {
+    private double[] spawnPoint(Course c, double pt, double ps, boolean front, double dist, boolean free, boolean center) {
         ThreadLocalRandom r = ThreadLocalRandom.current();
-        // 出現する列: spawn-lane-center が true なら道の真ん中、false ならランダム
-        double s = cfg().getBoolean("spawn-lane-center", false) ? 0.0 : r.nextDouble(-Course.MOB_S, Course.MOB_S);
+        // 出現する列: 必中の mob は道の真ん中、それ以外はランダム
+        double s = center ? 0.0 : r.nextDouble(-Course.MOB_S, Course.MOB_S);
         double dl = s - ps;
         double dt = Math.sqrt(Math.max(1.0, dist * dist - dl * dl));   // 直線距離がちょうど dist になる
         double t = front ? pt + dt : pt - dt;
@@ -486,7 +485,7 @@ public final class GameManager {
         MobInfo firstInfo = null;
         for (int i = 0; i < count; i++) {
             boolean free = intro && spec.move() == MobSpec.Move.FLY;
-            double[] pos = spawnPoint(c, pt, psS, front, dist, free);
+            double[] pos = spawnPoint(c, pt, psS, front, dist, free, sureHit);
             double t = pos[0], s = pos[1];
 
             // トロッコに乗って、出現したレーンをまっすぐ進む（敵=スタート側へ / 味方=ゴール側へ）
@@ -509,10 +508,6 @@ public final class GameManager {
             le.setCollidable(false);
             le.setAI(false);          // 直線移動のみ（AI・経路探索は使わない）
             le.setGravity(false);
-            if (le instanceof org.bukkit.entity.EnderDragon dr) {
-                dr.setAI(true);           // AI を切ると羽ばたかないので、動きは固定（HOVER）にして AI は残す
-                dr.setPhase(org.bukkit.entity.EnderDragon.Phase.HOVER);
-            }
             if (le instanceof Ageable a) a.setAdult();
             if (spec.scale() != 1.0) {
                 AttributeInstance ai = le.getAttribute(Attribute.SCALE);

@@ -1,8 +1,5 @@
 # 道の最大の長さ（マス）
-max-length: 200
-
-# mob が出現する列（横位置）。true = 道の真ん中 / false = ランダム
-spawn-lane-center: false
+max-length: 2000
 
 # mob をプレイヤーから何マス離れた場所に出すか
 spawn-distance: 10

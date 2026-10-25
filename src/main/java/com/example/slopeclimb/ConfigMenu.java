@@ -85,9 +85,8 @@ public final class ConfigMenu implements Listener {
 
     private static List<Setting> general() {
         return List.of(
-                num("max-length", "道の最大の長さ", Material.RAIL, Type.INT, 10, 4, 200, "/koth create で作れる道の最大の長さ（マス）"),
+                num("max-length", "道の最大の長さ", Material.RAIL, Type.INT, 100, 4, 10000, "/koth create で作れる道の最大の長さ（マス）"),
                 num("spawn-distance", "mob の出現距離", Material.COMPASS, Type.DOUBLE, 1, 3, 50, "プレイヤーから何マス離れた所に mob が出るか"),
-                bool("spawn-lane-center", "出現する列を真ん中に固定", Material.RAIL, "オン = mob は道の真ん中の列に出る / オフ = 横のランダムな列に出る"),
                 num("push-speed", "押されるときの速さ", Material.PISTON, Type.DOUBLE, 0.01, 0.02, 1.0, "1tick あたりのマス数（0.18 = 約3.6マス/秒）。遅いほど押される距離は短くなる"),
                 num("summit-hold-seconds", "ゴールで耐える秒数", Material.GOLD_BLOCK, Type.DOUBLE, 1, 1, 300, "ゴールの台にこの秒数とどまると勝ち"),
                 num("push-cooldown-ticks", "押された後の無敵時間", Material.SHIELD, Type.INT, 5, 0, 200, "押された後、次に押されるまでの時間（tick、20 = 1秒）"),

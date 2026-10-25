@@ -102,4 +102,8 @@ JDK 25 と Gradle 9.1 以上が必要です。 `gradle build` → `build/libs/Sl
 - 演出のカメラを ArmorStand から Marker（何も描画されない）に変更。
 
 ## v1.12.4 の変更
-- mob の出現列を「真ん中 / ランダム」で選べるように（config の spawn-lane-center、または /koth config の基本設定）。
+- 必中（hit: true）の mob は道の真ん中の列に出現、必中でない mob はランダムな列に出現。
+- エンダードラゴンがすぐ消える問題のため、v1.12.3 の AI 有効化を取り消し（AI を切った状態に戻した）。
+
+## v1.12.5 の変更
+- 道の最大の長さを 200 → 2000 に（config の max-length / /koth config で 10000 まで変更可）。

@@ -92,7 +92,7 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
             return;
         }
         Integer len = parseInt(a[1]);
-        int max = plugin.getConfig().getInt("max-length", 200);
+        int max = plugin.getConfig().getInt("max-length", 2000);
         if (len == null || len < 4 || len > max) {
             sender.sendMessage("§c長さは 4〜" + max + " の整数で指定してください。");
             return;
