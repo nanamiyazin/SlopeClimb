@@ -12,6 +12,9 @@ import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.entity.EntityTeleportEvent;
 import org.bukkit.event.entity.ExplosionPrimeEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.vehicle.VehicleDamageEvent;
+import org.bukkit.event.vehicle.VehicleDestroyEvent;
+import org.spigotmc.event.entity.EntityDismountEvent;
 
 public final class MobListener implements Listener {
 
@@ -70,5 +73,25 @@ public final class MobListener implements Listener {
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
         game.endCinematicFor(e.getPlayer());
+        game.records().forget(e.getPlayer());
+    }
+
+    /** トロッコは壊せない */
+    @EventHandler(ignoreCancelled = true)
+    public void onCartDamage(VehicleDamageEvent e) {
+        if (game.isCart(e.getVehicle())) e.setCancelled(true);
+    }
+
+    @EventHandler(ignoreCancelled = true)
+    public void onCartDestroy(VehicleDestroyEvent e) {
+        if (game.isCart(e.getVehicle())) e.setCancelled(true);
+    }
+
+    /** mob はトロッコから降りない（プラグインが消すときだけ降りる） */
+    @EventHandler(ignoreCancelled = true)
+    public void onDismount(EntityDismountEvent e) {
+        if (e.isCancellable() && game.isSlopeMob(e.getEntity()) && game.isCart(e.getDismounted())) {
+            e.setCancelled(true);
+        }
     }
 }

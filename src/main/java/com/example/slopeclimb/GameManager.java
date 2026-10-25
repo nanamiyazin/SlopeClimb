@@ -1,5 +1,6 @@
 package com.example.slopeclimb;
 
+import io.papermc.paper.entity.TeleportFlag;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.title.Title;
@@ -27,6 +28,7 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Firework;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.meta.FireworkMeta;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -59,8 +61,8 @@ public final class GameManager {
         private final MobSpec spec;
         final double speed;       // 1tickあたりのマス数
         final boolean sureHit;    // 必中（横にずれていても、通過すれば必ず接触する）
-        double dirT, dirS;        // 進む方向（コース座標・正規化）
-        int latSign = 1;          // 横方向の向き（壁で反射すると反転）
+        double dirT;              // 進む向き（+1 = ゴール側へ / -1 = スタート側へ）。横にはずれず、まっすぐ進む
+        final double dirS = 0;
         boolean riding = false;   // 押している最中（プレイヤーについていく状態）
 
         MobInfo(Role role, double seconds, int power, MobSpec spec, double speed, boolean sureHit) {
@@ -76,17 +78,6 @@ public final class GameManager {
         public double seconds() { return seconds; }
         public int power() { return power; }
         public MobSpec spec() { return spec; }
-
-        /** 縦一列にまっすぐ進まないよう、坂の横方向の成分を最低限持たせる */
-        void enforceLateral(double minS) {
-            if (Math.abs(dirS) >= minS) {
-                latSign = dirS > 0 ? 1 : -1;
-                return;
-            }
-            double signT = dirT >= 0 ? 1 : -1;
-            dirS = latSign * minS;
-            dirT = signT * Math.sqrt(1 - minS * minS);
-        }
     }
 
     private record Force(int enemyPower, double enemySec, int allyPower, double allySec) {}
@@ -154,10 +145,19 @@ public final class GameManager {
     private final Set<UUID> finished = new HashSet<>();
     private final Map<UUID, Double> gauge = new HashMap<>();
     private final Map<UUID, net.kyori.adventure.bossbar.BossBar> gaugeBars = new HashMap<>();
+    private final Map<UUID, Long> gaugeResetAt = new HashMap<>();   // ゲージが 0 になった後、満タンに戻す時刻(tick)
+    private final Map<UUID, net.kyori.adventure.bossbar.BossBar> distBars = new HashMap<>();
+    private final Map<UUID, UUID> carts = new HashMap<>();          // mob の UUID → 乗っているトロッコの UUID
+
+    private final Records records;
 
     public GameManager(SlopeClimbPlugin plugin) {
         this.plugin = plugin;
+        this.records = new Records(plugin);
+        this.records.enable();
     }
+
+    public Records records() { return records; }
 
     private FileConfiguration cfg() { return plugin.getConfig(); }
 
@@ -221,13 +221,38 @@ public final class GameManager {
         return Math.max(lo, Math.min(hi, v));
     }
 
-    private void teleportInternal(Entity e, Location dest) {
+    /** mob を動かす。トロッコに乗っていれば、乗せたままトロッコごと動かす */
+    private void moveMob(LivingEntity le, Location dest) {
         internalMove = true;
         try {
-            e.teleport(dest);
+            Entity cart = cartOf(le.getUniqueId());
+            if (cart != null && cart.isValid() && le.getVehicle() == cart) {
+                cart.teleport(dest, TeleportFlag.EntityState.RETAIN_PASSENGERS);
+                le.setRotation(dest.getYaw(), 0f);
+            } else {
+                le.teleport(dest);
+            }
         } finally {
             internalMove = false;
         }
+    }
+
+    private Entity cartOf(UUID mobId) {
+        UUID cid = carts.get(mobId);
+        return cid == null ? null : Bukkit.getEntity(cid);
+    }
+
+    public boolean isCart(Entity e) {
+        return e != null && carts.containsValue(e.getUniqueId());
+    }
+
+    /** mob を消す（乗っているトロッコも一緒に） */
+    private void discardMob(UUID mobId) {
+        Entity cart = cartOf(mobId);
+        carts.remove(mobId);
+        Entity mob = Bukkit.getEntity(mobId);
+        if (mob != null) mob.remove();
+        if (cart != null) cart.remove();
     }
 
     // ---------- コース生成 / 削除 ----------
@@ -319,6 +344,7 @@ public final class GameManager {
         clearMobs(null);
         for (UUID id : new ArrayList<>(pushes.keySet())) endPush(id);
         hideAllGauges();
+        hideAllDist();
         endAllBuffs();
         startTimes.clear();
         finished.clear();
@@ -335,8 +361,10 @@ public final class GameManager {
     }
 
     public void shutdown() {
+        records.disable();
         endAllCinematics();
         hideAllGauges();
+        hideAllDist();
         endAllBuffs();
         clearMobs(null);
         if (course != null && course.ready && cfg().getBoolean("restore-on-disable", true)) {
@@ -413,9 +441,9 @@ public final class GameManager {
         int power = (int) Math.round(mobDouble(role, spec, "power", 5));
         double speedPs = mobDouble(role, spec, "speed", 4.0);
         boolean sureHit = mobBool(role, spec, "hit", true);
-        double minS = Math.sin(Math.toRadians(cfg().getDouble("mob-min-angle", 25.0)));
 
         int spawned = 0;
+        int noCart = 0;
         LivingEntity firstBoss = null;
         MobInfo firstInfo = null;
         for (int i = 0; i < count; i++) {
@@ -423,26 +451,12 @@ public final class GameManager {
             double[] pos = spawnPoint(c, pt, psS, front, dist, free);
             double t = pos[0], s = pos[1];
 
-            // 進む方向 = 出現地点からプレイヤーの位置へ向かう直線（ただし縦一列にはならないよう斜めにする）
-            double dT = pt - t, dS = psS - s;
-            double len = Math.hypot(dT, dS);
-            if (len < 0.01) {
-                dT = front ? -1 : 1;
-                dS = 0;
-                len = 1;
-            }
+            // トロッコに乗って、出現したレーンをまっすぐ進む（敵=スタート側へ / 味方=ゴール側へ）
             MobInfo mi = new MobInfo(role, seconds, power, spec, speedPs / 20.0, sureHit);
-            mi.dirT = dT / len;
-            mi.dirS = dS / len;
-            mi.latSign = Math.abs(dS) > 1e-3 ? (dS > 0 ? 1 : -1)
-                    : (s > 0 ? -1 : (s < 0 ? 1 : (ThreadLocalRandom.current().nextBoolean() ? 1 : -1)));
-            mi.enforceLateral(minS);
+            mi.dirT = front ? -1 : 1;
 
             Location loc = c.at(t, s);
-            loc.add(0, spec.hover(), 0);
-            double vx = mi.dirT * c.dx + mi.dirS * c.lx;
-            double vz = mi.dirT * c.dz + mi.dirS * c.lz;
-            loc.setYaw((float) Math.toDegrees(Math.atan2(-vx, vz)) + spec.yawOffset());
+            loc.setYaw((float) Math.toDegrees(Math.atan2(-mi.dirT * c.dx, mi.dirT * c.dz)) + spec.yawOffset());
             loc.setPitch(0f);
 
             Entity ent = c.world.spawnEntity(loc, type);
@@ -474,6 +488,21 @@ public final class GameManager {
             le.setCustomNameVisible(true);
 
             mobs.put(le.getUniqueId(), mi);
+
+            // トロッコに乗せる（乗れない mob はトロッコなしでそのまま進む）
+            Minecart cart = c.world.spawn(loc, Minecart.class, m -> {
+                m.setInvulnerable(true);
+                m.setPersistent(false);
+                m.setGravity(false);
+                m.setSilent(true);
+                m.setSlowWhenEmpty(false);
+            });
+            if (cart.addPassenger(le)) {
+                carts.put(le.getUniqueId(), cart.getUniqueId());
+            } else {
+                cart.remove();
+                noCart++;
+            }
             if (firstBoss == null) {
                 firstBoss = le;
                 firstInfo = mi;
@@ -487,7 +516,8 @@ public final class GameManager {
 
         return (role == Role.ENEMY ? "敵" : "味方") + " " + spec.key() + " を " + spawned
                 + " 体召喚しました（押す時間 " + fmtSec(seconds) + "秒 / 押す力 " + power
-                + " / 速さ " + fmtSec(speedPs) + "マス/秒 / " + (sureHit ? "必中" : "通常接触") + "）";
+                + " / 速さ " + fmtSec(speedPs) + "マス/秒 / " + (sureHit ? "必中" : "通常接触") + "）"
+                + (noCart > 0 ? "［" + noCart + " 体はトロッコに乗れませんでした］" : "");
     }
 
     public int clearMobs(Role only) {
@@ -496,8 +526,7 @@ public final class GameManager {
         while (it.hasNext()) {
             Map.Entry<UUID, MobInfo> e = it.next();
             if (only != null && e.getValue().role() != only) continue;
-            Entity ent = Bukkit.getEntity(e.getKey());
-            if (ent != null) ent.remove();
+            discardMob(e.getKey());
             it.remove();
             n++;
         }
@@ -745,13 +774,14 @@ public final class GameManager {
             Map.Entry<UUID, MobInfo> e = it.next();
             Entity ent = Bukkit.getEntity(e.getKey());
             if (!(ent instanceof LivingEntity le) || !le.isValid()) {
+                discardMob(e.getKey());
                 it.remove();
                 continue;
             }
             MobInfo mi = e.getValue();
             if (mi.riding) continue;   // 押している最中はプレイヤーについていく
             if (moveStraight(c, le, mi)) {
-                le.remove();
+                discardMob(e.getKey());
                 it.remove();
             }
         }
@@ -763,6 +793,7 @@ public final class GameManager {
             processPlayer(c, p);
         }
         tickGauges();
+        updateDistanceBars(c, ps);
         // コース外に出たプレイヤーの記録を消す
         for (Player p : Bukkit.getOnlinePlayers()) {
             UUID id = p.getUniqueId();
@@ -772,11 +803,13 @@ public final class GameManager {
                 holdSince.remove(id);
                 endPush(id);
                 hideGauge(p);
+                hideDist(p);
+                records.hide(p);
             }
         }
     }
 
-    /** mob を直線に動かす（縦一列にはならず斜めに進み、横の壁で反射する）。コースの外へ抜けたら true（削除） */
+    /** mob をトロッコに乗せたまま、自分のレーンをまっすぐ動かす。コースの外へ抜けたら true（削除） */
     private boolean moveStraight(Course c, LivingEntity ent, MobInfo mi) {
         MobSpec spec = mi.spec();
         Location ml = ent.getLocation();
@@ -784,33 +817,21 @@ public final class GameManager {
 
         double sp = mi.speed * buffMult(mi.role(), "speed-multiplier");
         double nt = t + mi.dirT * sp;
-        double ns = s + mi.dirS * sp;
-        if (ns > Course.MOB_S) {
-            ns = Course.MOB_S;
-            mi.dirS = -Math.abs(mi.dirS);
-            mi.latSign = -1;
-        } else if (ns < -Course.MOB_S) {
-            ns = -Course.MOB_S;
-            mi.dirS = Math.abs(mi.dirS);
-            mi.latSign = 1;
-        }
 
         double lo = -Course.PAD - 0.5;
         double hi = c.length + Course.PLATFORM + 0.5;
         if ((nt > hi && mi.dirT > 0) || (nt < lo && mi.dirT < 0)) return true;
 
-        Location dest = c.at(nt, ns);
-        dest.add(0, spec.hover(), 0);
-        double vx = mi.dirT * c.dx + mi.dirS * c.lx;
-        double vz = mi.dirT * c.dz + mi.dirS * c.lz;
-        dest.setYaw((float) Math.toDegrees(Math.atan2(-vx, vz)) + spec.yawOffset());
+        Location dest = c.at(nt, s);
+        dest.setYaw((float) Math.toDegrees(Math.atan2(-mi.dirT * c.dx, mi.dirT * c.dz)) + spec.yawOffset());
         dest.setPitch(0f);
-        teleportInternal(ent, dest);
+        moveMob(ent, dest);
         return false;
     }
 
     private void processPlayer(Course c, Player p) {
         UUID id = p.getUniqueId();
+        records.touch(p);
         Location loc = p.getLocation();
         double t = c.t(loc);
 
@@ -916,7 +937,8 @@ public final class GameManager {
                 double ddx = el.getX() - loc.getX(), ddz = el.getZ() - loc.getZ();
                 hit = ddx * ddx + ddz * ddz <= cr * cr && Math.abs(el.getY() - loc.getY()) <= 6;
             } else {
-                hit = pb.overlaps(ent.getBoundingBox());
+                Entity cart = cartOf(ent.getUniqueId());
+                hit = pb.overlaps(ent.getBoundingBox()) || (cart != null && pb.overlaps(cart.getBoundingBox()));
             }
             if (hit) out.add(ent);
         }
@@ -1036,7 +1058,7 @@ public final class GameManager {
             mobs.remove(e.getUniqueId());
             Location l = e.getLocation().add(0, e.getHeight() / 2, 0);
             e.getWorld().spawnParticle(Particle.POOF, l, 12, 0.3, 0.3, 0.3, 0.02);
-            e.remove();
+            discardMob(e.getUniqueId());
         }
     }
 
@@ -1048,12 +1070,15 @@ public final class GameManager {
         for (UUID u : push.riders) {
             Entity ent = Bukkit.getEntity(u);
             if (ent != null) list.add(ent);
-            else mobs.remove(u);
+            else {
+                mobs.remove(u);
+                discardMob(u);
+            }
         }
         consume(list);
     }
 
-    /** 押されている最中の mob をプレイヤーの両脇に付き添わせる（敵=坂の上側、味方=坂の下側） */
+    /** 押されている最中の mob をプレイヤーの両脇に付き添わせる（敵=ゴール側、味方=スタート側） */
     private void moveRiders(Course c, Push push, double pt, double ps) {
         int ie = 0, ia = 0;
         for (UUID u : push.riders) {
@@ -1067,11 +1092,10 @@ public final class GameManager {
             rt = clamp(rt, -Course.PAD + 0.3, c.length + Course.PLATFORM - 0.3);
             double rs = clamp(ps + LANES[idx % 3], -Course.MOB_S, Course.MOB_S);
             Location dest = c.at(rt, rs);
-            dest.add(0, mi.spec().hover(), 0);
-            int sign = enemy ? -1 : 1;   // 敵は坂の下向き、味方は上向きにプレイヤーを見る
+            int sign = enemy ? -1 : 1;   // 敵はスタート側向き、味方はゴール側向きにプレイヤーを見る
             dest.setDirection(new Vector(sign * c.dx, 0, sign * c.dz));
             dest.setYaw(dest.getYaw() + mi.spec().yawOffset());
-            teleportInternal(le, dest);
+            moveMob(le, dest);
         }
     }
 
@@ -1135,9 +1159,22 @@ public final class GameManager {
 
     // ---------- ダメージゲージ ----------
 
-    /** ゲージを減らす。尽きたら true */
+    private static int num(double v) {
+        return (int) Math.round(v);
+    }
+
+    private Component gaugeTitle(double v, double max) {
+        if (v <= 0) {
+            return Component.text("ダメージゲージ 0 / " + num(max) + "   -1win", NamedTextColor.DARK_RED);
+        }
+        return Component.text("ダメージゲージ " + num(v) + " / " + num(max), NamedTextColor.RED);
+    }
+
+    /** ゲージを減らす。尽きた（0 になった）瞬間だけ true */
     private boolean damageGauge(Player p) {
         UUID id = p.getUniqueId();
+        if (gaugeResetAt.containsKey(id)) return false;   // 0 になった直後は、満タンに戻るまでダメージなし
+
         double max = cfg().getDouble("wall-damage.gauge-max", 100.0);
         double per = cfg().getDouble("wall-damage.per-block", 10.0);
         double v = Math.max(0, gauge.getOrDefault(id, max) - per);
@@ -1146,44 +1183,108 @@ public final class GameManager {
         net.kyori.adventure.bossbar.BossBar bar = gaugeBars.get(id);
         if (bar == null) {
             bar = net.kyori.adventure.bossbar.BossBar.bossBar(
-                    Component.text("ダメージゲージ", NamedTextColor.RED), 1f,
+                    gaugeTitle(max, max), 1f,
                     net.kyori.adventure.bossbar.BossBar.Color.RED,
                     net.kyori.adventure.bossbar.BossBar.Overlay.NOTCHED_10);
             gaugeBars.put(id, bar);
             p.showBossBar(bar);
         }
+        bar.name(gaugeTitle(v, max));
         bar.progress((float) clamp(v / max, 0, 1));
         p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_HURT, 1f, 1f);
 
         if (v > 0) return false;
 
-        // ゲージが尽きた → ダウン
-        Bukkit.broadcast(Component.text("✖ " + p.getName() + " は壁に押しつぶされてダウン！", NamedTextColor.DARK_RED));
-        p.showTitle(Title.title(Component.text("ダウン！", NamedTextColor.DARK_RED),
-                Component.text("ダメージゲージが尽きた", NamedTextColor.GRAY)));
-        gauge.put(id, max);
-        bar.progress(1f);
+        // ゲージが 0 になった → -1win
+        records.addLoss(p, cfg().getBoolean("scoreboard.minus-win-on-loss", false));
+        Bukkit.broadcast(Component.text("✖ " + p.getName() + " は壁に押しつぶされた！  -1win"
+                + "  通算 " + records.wins(p.getName()) + "勝 " + records.losses(p.getName()) + "敗", NamedTextColor.DARK_RED));
+        p.showTitle(Title.title(Component.text("-1win", NamedTextColor.DARK_RED),
+                Component.text("ダメージゲージが 0 になった", NamedTextColor.GRAY)));
+        gaugeResetAt.put(id, tick + cfg().getLong("wall-damage.reset-delay-ticks", 60L));
         if (cfg().getBoolean("wall-damage.kill-on-zero", false)) p.setHealth(0.0);
         return true;
     }
 
     private void tickGauges() {
+        double max = cfg().getDouble("wall-damage.gauge-max", 100.0);
+
+        // 0 になってしばらくしたら満タンに戻す
+        if (!gaugeResetAt.isEmpty()) {
+            for (Iterator<Map.Entry<UUID, Long>> it = gaugeResetAt.entrySet().iterator(); it.hasNext(); ) {
+                Map.Entry<UUID, Long> e = it.next();
+                if (tick < e.getValue()) continue;
+                it.remove();
+                gauge.put(e.getKey(), max);
+                net.kyori.adventure.bossbar.BossBar bar = gaugeBars.get(e.getKey());
+                if (bar != null) {
+                    bar.name(gaugeTitle(max, max));
+                    bar.progress(1f);
+                }
+            }
+        }
+
         double regen = cfg().getDouble("wall-damage.regen-per-second", 0.0);
         if (regen <= 0 || tick % 20 != 0 || gauge.isEmpty()) return;
-        double max = cfg().getDouble("wall-damage.gauge-max", 100.0);
         for (Map.Entry<UUID, Double> e : gauge.entrySet()) {
-            if (e.getValue() >= max || pushes.containsKey(e.getKey())) continue;
+            if (e.getValue() >= max || e.getValue() <= 0 || pushes.containsKey(e.getKey())
+                    || gaugeResetAt.containsKey(e.getKey())) continue;
             double v = Math.min(max, e.getValue() + regen);
             e.setValue(v);
             net.kyori.adventure.bossbar.BossBar bar = gaugeBars.get(e.getKey());
-            if (bar != null) bar.progress((float) clamp(v / max, 0, 1));
+            if (bar != null) {
+                bar.name(gaugeTitle(v, max));
+                bar.progress((float) clamp(v / max, 0, 1));
+            }
         }
+    }
+
+    // ---------- ゴールまでの距離 ----------
+
+    private void updateDistanceBars(Course c, List<Player> ps) {
+        if (!cfg().getBoolean("goal-distance.enabled", true)) return;
+        if (tick % 4 != 0) return;
+        for (Player p : ps) {
+            Location loc = p.getLocation();
+            double t = c.t(loc);
+            int remain = (int) Math.max(0, Math.ceil(c.length - t));
+            net.kyori.adventure.bossbar.BossBar bar = distBars.get(p.getUniqueId());
+            if (bar == null) {
+                bar = net.kyori.adventure.bossbar.BossBar.bossBar(
+                        Component.text(""), 0f,
+                        net.kyori.adventure.bossbar.BossBar.Color.YELLOW,
+                        net.kyori.adventure.bossbar.BossBar.Overlay.PROGRESS);
+                distBars.put(p.getUniqueId(), bar);
+                p.showBossBar(bar);
+            }
+            if (c.onSummit(loc)) {
+                bar.name(Component.text("ゴールの台の上！", NamedTextColor.GOLD));
+                bar.progress(1f);
+            } else {
+                bar.name(Component.text("ゴールまで " + remain + " マス", NamedTextColor.YELLOW));
+                bar.progress((float) clamp(t / c.length, 0, 1));
+            }
+        }
+    }
+
+    private void hideDist(Player p) {
+        net.kyori.adventure.bossbar.BossBar bar = distBars.remove(p.getUniqueId());
+        if (bar != null) p.hideBossBar(bar);
+    }
+
+    private void hideAllDist() {
+        for (UUID id : new ArrayList<>(distBars.keySet())) {
+            Player p = Bukkit.getPlayer(id);
+            if (p != null) hideDist(p);
+        }
+        distBars.clear();
     }
 
     private void hideGauge(Player p) {
         net.kyori.adventure.bossbar.BossBar bar = gaugeBars.remove(p.getUniqueId());
         if (bar != null) p.hideBossBar(bar);
         gauge.remove(p.getUniqueId());
+        gaugeResetAt.remove(p.getUniqueId());
     }
 
     private void hideAllGauges() {
@@ -1193,6 +1294,7 @@ public final class GameManager {
         }
         gaugeBars.clear();
         gauge.clear();
+        gaugeResetAt.clear();
     }
 
     private void win(Course c, Player p) {
@@ -1203,7 +1305,9 @@ public final class GameManager {
             double sec = (System.currentTimeMillis() - start) / 1000.0;
             time = String.format(Locale.ROOT, "（タイム %.1f 秒）", sec);
         }
-        Bukkit.broadcast(Component.text("★ " + p.getName() + " がゴールを守りきって勝利！" + time, NamedTextColor.GOLD));
+        records.addWin(p);
+        Bukkit.broadcast(Component.text("★ " + p.getName() + " がゴールを守りきって勝利！" + time
+                + "  通算 " + records.wins(p.getName()) + "勝 " + records.losses(p.getName()) + "敗", NamedTextColor.GOLD));
         p.playSound(p.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1f, 1f);
 
         Location l = c.at(c.length + 1.5, 0);

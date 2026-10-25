@@ -4,10 +4,6 @@ max-length: 200
 # mob をプレイヤーから何マス離れた場所（ランダム）に出すか
 spawn-distance: 10
 
-# mob が道の縦一列にまっすぐ進まないための、道の進行方向からの最低の傾き（度）。
-# 小さいほど縦長の動き、大きいほど横に大きく振れる。壁にぶつかると跳ね返る
-mob-min-angle: 25
-
 # 「巨大ねこ」「巨大ウーパールーパー」の大きさ倍率
 giant-scale: 3.0
 
@@ -133,13 +129,29 @@ intro:
   distance: 30      # 出現する距離（マス）
   max-ticks: 200    # 演出の最大の長さ（tick、20tick=1秒）。ボスが近づくと自動で終わる
 
-# スタート地点の壁に敵に押し付けられたときのダメージゲージ
+# 勝ち数・負け数のスコアボード（画面右に、自分の「勝ち N」「負け M」だけを表示。名前は載せない。
+# コースの上にいる間だけ、そのプレイヤー専用のスコアボードに切り替わる）
+#   勝ち = ゴールの台に規定の秒数とどまって勝利したとき
+#   負け = ダメージゲージが 0 になった（-1win）とき
+# 記録は koth_wins / koth_losses という名前のスコアボードにも保存され、再起動しても残る。
+# 例: /scoreboard players get Steve koth_wins
+scoreboard:
+  enabled: true              # 画面右のスコアボードを表示するか（false でも記録は残る）
+  title: "KOTH 戦績"
+  minus-win-on-loss: false   # true にすると、負けたとき勝ち数も 1 減る（0 未満にはならない）
+
+# ゴールまでの距離の表示（画面上部のボスバー「ゴールまで N マス」）
+goal-distance:
+  enabled: true
+
+# スタート地点の壁に敵に押し付けられたときのダメージゲージ（数値で表示。0 になると「-1win」）
 wall-damage:
   enabled: true
   gauge-max: 100          # ゲージの最大値
   per-block: 10           # 壁に押し付けられた1マス分ごとに減る量
   regen-per-second: 0     # 1秒ごとの自然回復量（0 = 回復しない）
-  kill-on-zero: false     # true にするとゲージが尽きたときプレイヤーが死亡する
+  kill-on-zero: false     # true にするとゲージが 0 になったときプレイヤーが死亡する
+  reset-delay-ticks: 60   # 0 になって「-1win」と表示してから、満タンに戻るまでの時間（tick、20tick=1秒）
 
 # 道のブロック（/koth material <種類> <素材> でも変更できる）
 materials:

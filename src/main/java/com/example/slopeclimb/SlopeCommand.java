@@ -48,10 +48,12 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage(err == null ? "§aコースを元に戻しています..." : "§c" + err);
             }
             case "buff" -> buff(sender, a);
+            case "score" -> score(sender, a);
             case "material" -> material(sender, a);
             case "info" -> info(sender);
             case "reload" -> {
                 plugin.reloadConfig();
+                game.records().reload();
                 sender.sendMessage("§a設定を再読み込みしました。");
             }
             default -> help(sender, label);
@@ -66,7 +68,8 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
         s.sendMessage("§e/" + l + " enemy <mob> [数] §7- 敵をゴール側に召喚（押す力・時間・速さ・必中は config.yml の enemy-mobs で設定）");
         s.sendMessage("§e/" + l + " ally <mob> [数] §7- 味方をスタート側に召喚（config.yml の ally-mobs で設定）");
         s.sendMessage("§e/" + l + " buff <enemy|ally|off> §7- 敵/味方を強化（味方=道の左半分が氷、敵=右半分がソウルサンド）");
-        s.sendMessage("§7  mob は道の縦一列にはまっすぐ進まず、斜めに進んで壁で跳ね返ります。出現位置はプレイヤーから10マス離れたランダムな場所");
+        s.sendMessage("§7  mob はトロッコに乗って、出現したレーンをまっすぐ進みます。出現位置はプレイヤーから10マス離れたランダムな場所");
+        s.sendMessage("§e/" + l + " score [reset [プレイヤー名]] §7- 戦績ランキングをチャットに表示 / リセット（画面右のスコアボードには自分の勝ち・負けだけを表示）");
         s.sendMessage("§e/" + l + " clear [enemy|ally] §7- mob を削除");
         s.sendMessage("§e/" + l + " remove §7- コースを元に戻す");
         s.sendMessage("§e/" + l + " info / reload");
@@ -139,6 +142,29 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage("§a" + game.spawn(role, spec, count, anchor));
     }
 
+    private void score(CommandSender sender, String[] a) {
+        Records r = game.records();
+        if (a.length >= 2 && a[1].equalsIgnoreCase("reset")) {
+            String target = a.length > 2 ? a[2] : null;
+            int n = r.reset(target);
+            sender.sendMessage(n > 0
+                    ? "§a" + (target == null ? "全員" : target) + " の勝ち数・負け数をリセットしました。"
+                    : "§c記録がありません: " + target);
+            return;
+        }
+        List<String> rank = r.ranking();
+        if (rank.isEmpty()) {
+            sender.sendMessage("§7まだ記録がありません。");
+            return;
+        }
+        sender.sendMessage("§6=== KOTH 戦績 ===");
+        int i = 1;
+        for (String name : rank) {
+            sender.sendMessage("§e" + i++ + ". §f" + name + "  §a勝 " + r.wins(name) + " §7/ §c負 " + r.losses(name));
+            if (i > 10) break;
+        }
+    }
+
     private void buff(CommandSender sender, String[] a) {
         if (a.length < 2) {
             sender.sendMessage("§c使い方: /koth buff <enemy|ally|off>");
@@ -194,17 +220,20 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
     public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] a) {
         List<String> out = new ArrayList<>();
         if (a.length == 1) {
-            out.addAll(List.of("create", "material", "enemy", "ally", "buff", "clear", "remove", "info", "reload", "help"));
+            out.addAll(List.of("create", "material", "enemy", "ally", "buff", "score", "clear", "remove", "info", "reload", "help"));
         } else if (a.length == 2) {
             switch (a[0].toLowerCase(Locale.ROOT)) {
                 case "enemy" -> out.addAll(game.allowedMobs(GameManager.Role.ENEMY));
                 case "ally" -> out.addAll(game.allowedMobs(GameManager.Role.ALLY));
                 case "clear" -> out.addAll(List.of("enemy", "ally"));
                 case "buff" -> out.addAll(List.of("enemy", "ally", "off"));
+                case "score" -> out.add("reset");
                 case "create" -> out.addAll(List.of("20", "50", "100"));
                 case "material" -> out.addAll(List.of("floor", "fill", "pad", "goal", "wall"));
                 default -> { }
             }
+        } else if (a.length == 3 && a[0].equalsIgnoreCase("score") && a[1].equalsIgnoreCase("reset")) {
+            out.addAll(game.records().ranking());
         } else if (a.length == 3 && a[0].equalsIgnoreCase("create")) {
             out.addAll(game.suggestMaterials("floor", a[2]));
         } else if (a.length == 3 && a[0].equalsIgnoreCase("material")) {
