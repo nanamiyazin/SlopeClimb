@@ -39,6 +39,7 @@ public final class Records {
     private final Set<String> known = new LinkedHashSet<>();
     private final Map<UUID, Scoreboard> personal = new HashMap<>();
     private final Set<UUID> shown = new HashSet<>();
+    private final Map<UUID, int[]> forces = new HashMap<>();   // {押す力(味方), 押し戻す力(敵)}
 
     public Records(SlopeClimbPlugin plugin) {
         this.plugin = plugin;
@@ -126,8 +127,18 @@ public final class Records {
 
     /** 退出したプレイヤーの表示を片付ける */
     public void forget(Player p) {
+        forces.remove(p.getUniqueId());
         shown.remove(p.getUniqueId());
         personal.remove(p.getUniqueId());
+    }
+
+    /** 押し合いの力を更新する（push = 押す力（味方の合計）、back = 押し戻す力（敵の合計）） */
+    public void setForces(Player p, int push, int back) {
+        UUID id = p.getUniqueId();
+        int[] cur = forces.get(id);
+        if (cur == null ? (push == 0 && back == 0) : (cur[0] == push && cur[1] == back)) return;
+        forces.put(id, new int[]{push, back});
+        if (shown.contains(id)) update(p);
     }
 
     private void update(Player p) {
@@ -136,13 +147,23 @@ public final class Records {
         Objective o = b.getObjective("koth");
         if (o == null) return;
         String name = p.getName();
-        // 名前は載せず、「勝ち」と「負け」の数だけを出す（勝ちが必ず上）
-        var w = o.getScore("wins");
-        w.setScore(2);
-        w.customName(Component.text("勝ち  " + wins(name), NamedTextColor.GREEN));
-        var l = o.getScore("losses");
-        l.setScore(1);
-        l.customName(Component.text("負け  " + losses(name), NamedTextColor.RED));
+        int[] f = forces.getOrDefault(p.getUniqueId(), new int[]{0, 0});
+        int net = f[0] - f[1];
+
+        // 名前は載せず、数だけを出す（上から 勝ち / 負け / 区切り / 押す力 / 押し戻す力 / 合計）
+        line(o, "wins", 6, Component.text("勝ち  " + wins(name), NamedTextColor.GREEN));
+        line(o, "losses", 5, Component.text("負け  " + losses(name), NamedTextColor.RED));
+        line(o, "sep", 4, Component.text("──────────", NamedTextColor.DARK_GRAY));
+        line(o, "push", 3, Component.text("押す力(味方)  " + f[0], NamedTextColor.AQUA));
+        line(o, "back", 2, Component.text("押し戻す力(敵)  " + f[1], NamedTextColor.LIGHT_PURPLE));
+        line(o, "net", 1, Component.text("合計  " + (net > 0 ? "+" : "") + net,
+                net > 0 ? NamedTextColor.GREEN : (net < 0 ? NamedTextColor.RED : NamedTextColor.YELLOW)));
+    }
+
+    private static void line(Objective o, String entry, int score, Component text) {
+        var sc = o.getScore(entry);
+        sc.setScore(score);
+        sc.customName(text);
     }
 
     private void updateOnline(String name) {

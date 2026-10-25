@@ -148,6 +148,8 @@ public final class GameManager {
     private final Map<UUID, Long> gaugeResetAt = new HashMap<>();   // ゲージが 0 になった後、満タンに戻す時刻(tick)
     private final Map<UUID, net.kyori.adventure.bossbar.BossBar> distBars = new HashMap<>();
     private final Map<UUID, UUID> carts = new HashMap<>();          // mob の UUID → 乗っているトロッコの UUID
+    private final Map<UUID, Long> forceHold = new HashMap<>();      // スコアボードの「力」の表示を残す期限(tick)
+    private final Set<UUID> dying = new HashSet<>();                // 倒されて死亡アニメーション中の mob
 
     private final Records records;
 
@@ -244,6 +246,40 @@ public final class GameManager {
 
     public boolean isCart(Entity e) {
         return e != null && carts.containsValue(e.getUniqueId());
+    }
+
+    public boolean isDying(Entity e) {
+        return e != null && dying.contains(e.getUniqueId());
+    }
+
+    /** 弱い側の mob を倒す。死亡のアニメーションと音を出して消える（ドロップや経験値はなし） */
+    private void killMobs(List<Entity> list) {
+        for (Entity e : list) killMob(e);
+    }
+
+    private void killMob(Entity e) {
+        UUID id = e.getUniqueId();
+        mobs.remove(id);
+        Entity cart = cartOf(id);
+        carts.remove(id);
+        if (cart != null) cart.remove();
+
+        Location l = e.getLocation().add(0, e.getHeight() / 2, 0);
+        e.getWorld().spawnParticle(Particle.POOF, l, 16, 0.3, 0.3, 0.3, 0.03);
+        if (e instanceof LivingEntity le && le.isValid()) {
+            dying.add(id);
+            le.setInvulnerable(false);
+            le.setAI(false);
+            le.setHealth(0.0);   // 死亡（ドロップは MobListener で消す）
+            // 念のため、少し待っても残っていたら確実に消す
+            Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                Entity x = Bukkit.getEntity(id);
+                if (x != null) x.remove();
+                dying.remove(id);
+            }, 40L);
+        } else {
+            e.remove();
+        }
     }
 
     /** mob を消す（乗っているトロッコも一緒に） */
@@ -861,6 +897,9 @@ public final class GameManager {
             if (t < c.length - 1) finished.remove(id);
         }
 
+        // 押し合いが終わって少したったら、スコアボードの「力」の表示を 0 に戻す
+        if (!pushes.containsKey(id) && tick >= forceHold.getOrDefault(id, 0L)) records.setForces(p, 0, 0);
+
         Push push = pushes.get(id);
         if (push == null && tick < immuneUntil.getOrDefault(id, 0L)) return;
 
@@ -877,6 +916,7 @@ public final class GameManager {
         if (touching.isEmpty()) return;
 
         Force f = forceOf(infosOf(touching));
+        showForces(p, f);
         boolean back;
         double sec;
         int power;
@@ -891,22 +931,29 @@ public final class GameManager {
         } else {
             // 力が同じ → 押し合い互角（誰も動かず、mob も消えない。そのまま直進を続ける）
             p.sendActionBar(Component.text("押し合い互角！", NamedTextColor.YELLOW));
+            forceHold.put(id, tick + 40);
             immuneUntil.put(id, tick + 20);
             return;
         }
 
-        // 触れた mob は全員（勝った側も負けた側も）、押されている間プレイヤーと一緒に動く。
-        // 壁で動けなくなっても、押す時間が終わるまで消えない。
+        // 強い側の mob は押している間プレイヤーについていく。弱い側の mob は倒されて消える
+        Role winRole = back ? Role.ENEMY : Role.ALLY;
         List<UUID> riders = new ArrayList<>();
+        List<Entity> losers = new ArrayList<>();
         for (Entity ent : touching) {
             MobInfo mi = mobs.get(ent.getUniqueId());
-            if (mi != null) {
+            if (mi == null) continue;
+            if (mi.role() == winRole) {
                 mi.riding = true;
                 riders.add(ent.getUniqueId());
+            } else {
+                losers.add(ent);
             }
         }
+        killMobs(losers);
+
         // 押す時間(秒) × push-speed(1tickあたりのマス数) × 20tick = 押される総距離
-        double speed = cfg().getDouble("push-speed", 0.25);
+        double speed = cfg().getDouble("push-speed", 0.18);
         double total = Math.max(speed, sec * 20.0 * speed);
         pushes.put(id, new Push(back ? -1 : 1, total, speed, back, riders, power));
         if (back) {
@@ -914,6 +961,11 @@ public final class GameManager {
         } else {
             p.sendActionBar(Component.text("味方が " + fmtSec(sec) + " 秒押してくれる！（合計力 " + power + "）", NamedTextColor.GREEN));
         }
+    }
+
+    /** スコアボードに「押す力（味方）」「押し戻す力（敵）」を出す。合計はスコアボード側で足し引きする */
+    private void showForces(Player p, Force f) {
+        records.setForces(p, Math.max(0, f.allyPower()), Math.max(0, f.enemyPower()));
     }
 
     /** プレイヤーに接触している（押し中でない）mob を集める */
@@ -1008,34 +1060,52 @@ public final class GameManager {
         }
         all.addAll(infosOf(touching));
         Force f = forceOf(all);
+        showForces(p, f);
 
         int samePower = push.back ? f.enemyPower() : f.allyPower();
         double sameSec = push.back ? f.enemySec() : f.allySec();
         int oppPower = push.back ? f.allyPower() : f.enemyPower();
         double oppSec = push.back ? f.allySec() : f.enemySec();
+        Role sameRole = push.back ? Role.ENEMY : Role.ALLY;   // 今押している側
 
         // 合計の力が同じ → 互角。押しが止まり、mob は消えずに直進に戻る
         if (oppPower >= 0 && oppPower == samePower) {
             for (MobInfo mi : all) mi.riding = false;
             pushes.remove(id);
+            forceHold.put(id, tick + 40);
             p.sendActionBar(Component.text("押し合い互角！（合計力 " + samePower + " 同士）", NamedTextColor.YELLOW));
             immuneUntil.put(id, tick + 20);
             return;
         }
 
-        for (Entity ent : touching) {
-            MobInfo mi = mobs.get(ent.getUniqueId());
-            if (mi != null) {
-                mi.riding = true;
-                push.riders.add(ent.getUniqueId());
-            }
-        }
-
+        List<Entity> dead = new ArrayList<>();
         if (oppPower > samePower) {
-            // 逆側の合計のほうが強い → 押し返される。向きが反転し、押す時間も逆側のものになる
+            // 逆側の合計のほうが強い → 押し返される。今まで押していた mob は倒され、
+            // 向きが反転して、押す時間も逆側のものになる
+            for (UUID u : push.riders) {
+                Entity e = Bukkit.getEntity(u);
+                if (e != null) dead.add(e);
+                else {
+                    mobs.remove(u);
+                    discardMob(u);
+                }
+            }
+            List<UUID> newRiders = new ArrayList<>();
+            for (Entity ent : touching) {
+                MobInfo mi = mobs.get(ent.getUniqueId());
+                if (mi == null) continue;
+                if (mi.role() == sameRole) {
+                    dead.add(ent);
+                } else {
+                    mi.riding = true;
+                    newRiders.add(ent.getUniqueId());
+                }
+            }
+            killMobs(dead);
+
             boolean newBack = !push.back;
             double total = Math.max(push.speed, oppSec * 20.0 * push.speed);
-            pushes.put(id, new Push(newBack ? -1 : 1, total, push.speed, newBack, push.riders, oppPower));
+            pushes.put(id, new Push(newBack ? -1 : 1, total, push.speed, newBack, newRiders, oppPower));
             if (newBack) {
                 p.sendActionBar(Component.text("敵に押し返された！（合計力 " + oppPower + " 対 " + samePower + "）", NamedTextColor.RED));
             } else {
@@ -1043,13 +1113,24 @@ public final class GameManager {
             }
             p.playSound(p.getLocation(), Sound.ITEM_SHIELD_BLOCK, 1f, 1f);
         } else {
-            // 押している側が優勢のまま → 押す時間が今より長ければ延長する
+            // 押している側が優勢のまま → 逆側の弱い mob は倒され、同じ側の mob は加勢して一緒に押す
+            for (Entity ent : touching) {
+                MobInfo mi = mobs.get(ent.getUniqueId());
+                if (mi == null) continue;
+                if (mi.role() == sameRole) {
+                    mi.riding = true;
+                    push.riders.add(ent.getUniqueId());
+                } else {
+                    dead.add(ent);
+                }
+            }
+            killMobs(dead);
+            // 押す時間が今より長ければ延長する
             double remaining = push.total - push.moved;
             double extra = sameSec * 20.0 * push.speed;
             if (extra > remaining) push.total = push.moved + extra;
             push.power = samePower;
         }
-        // 逆側で力が弱い mob は押し返せないが、一緒に押されて運ばれる
     }
 
     /** 接触した mob を消す */

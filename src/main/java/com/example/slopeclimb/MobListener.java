@@ -7,6 +7,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityChangeBlockEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.entity.EntityTeleportEvent;
@@ -84,5 +85,14 @@ public final class MobListener implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onCartDestroy(VehicleDestroyEvent e) {
         if (game.isCart(e.getVehicle())) e.setCancelled(true);
+    }
+
+    /** 倒された mob はアイテムも経験値も落とさない */
+    @EventHandler
+    public void onDeath(EntityDeathEvent e) {
+        if (game.isDying(e.getEntity())) {
+            e.getDrops().clear();
+            e.setDroppedExp(0);
+        }
     }
 }

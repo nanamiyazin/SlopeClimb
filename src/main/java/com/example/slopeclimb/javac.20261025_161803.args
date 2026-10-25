@@ -1,0 +1,11 @@
+-proc:none
+-d
+/tmp/jcheck
+ConfigMenu.java
+Course.java
+GameManager.java
+MobListener.java
+MobSpec.java
+Records.java
+SlopeClimbPlugin.java
+SlopeCommand.java

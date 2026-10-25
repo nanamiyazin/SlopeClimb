@@ -16,10 +16,12 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
 
     private final SlopeClimbPlugin plugin;
     private final GameManager game;
+    private final ConfigMenu menu;
 
-    public SlopeCommand(SlopeClimbPlugin plugin, GameManager game) {
+    public SlopeCommand(SlopeClimbPlugin plugin, GameManager game, ConfigMenu menu) {
         this.plugin = plugin;
         this.game = game;
+        this.menu = menu;
     }
 
     @Override
@@ -47,6 +49,10 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
                 String err = game.remove();
                 sender.sendMessage(err == null ? "§aコースを元に戻しています..." : "§c" + err);
             }
+            case "config", "menu", "settings" -> {
+                if (sender instanceof Player p) menu.open(p);
+                else sender.sendMessage("§cプレイヤーのみ実行できます。");
+            }
             case "buff" -> buff(sender, a);
             case "score" -> score(sender, a);
             case "material" -> material(sender, a);
@@ -63,6 +69,7 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
 
     private void help(CommandSender s, String l) {
         s.sendMessage("§6=== KOTH (SlopeClimb) ===");
+        s.sendMessage("§e/" + l + " config §7- 設定メニューを開く（オン・オフや数値をクリックで変更）");
         s.sendMessage("§e/" + l + " create <長さ> [床素材] §7- 向いている方向に幅6マスのまっすぐな道を生成（両脇バリア、スタート側に壁、奥にゴールの台）");
         s.sendMessage("§e/" + l + " material <floor|fill|pad|goal|wall> <素材> §7- 道の素材を変更して保存");
         s.sendMessage("§e/" + l + " enemy <mob> [数] §7- 敵をゴール側に召喚（押す力・時間・速さ・必中は config.yml の enemy-mobs で設定）");
@@ -220,7 +227,7 @@ public final class SlopeCommand implements CommandExecutor, TabCompleter {
     public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] a) {
         List<String> out = new ArrayList<>();
         if (a.length == 1) {
-            out.addAll(List.of("create", "material", "enemy", "ally", "buff", "score", "clear", "remove", "info", "reload", "help"));
+            out.addAll(List.of("create", "material", "enemy", "ally", "config", "buff", "score", "clear", "remove", "info", "reload", "help"));
         } else if (a.length == 2) {
             switch (a[0].toLowerCase(Locale.ROOT)) {
                 case "enemy" -> out.addAll(game.allowedMobs(GameManager.Role.ENEMY));

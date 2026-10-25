@@ -14,9 +14,12 @@ public final class SlopeClimbPlugin extends JavaPlugin {
 
         getServer().getPluginManager().registerEvents(new MobListener(game), this);
 
+        ConfigMenu menu = new ConfigMenu(this, game);
+        getServer().getPluginManager().registerEvents(menu, this);
+
         PluginCommand cmd = getCommand("koth");
         if (cmd != null) {
-            SlopeCommand handler = new SlopeCommand(this, game);
+            SlopeCommand handler = new SlopeCommand(this, game, menu);
             cmd.setExecutor(handler);
             cmd.setTabCompleter(handler);
         }
