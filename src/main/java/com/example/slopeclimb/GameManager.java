@@ -106,16 +106,16 @@ public final class GameManager {
 
     private static final class Cinematic {
         final Player player;
-        final Location origLoc;
+        Location origLoc;            // 演出中も押されて動く「本当の位置」
         final GameMode origMode;
-        final ArmorStand camera;
+        final Entity camera;
         final LivingEntity boss;
         final Vector fwd;     // ボスが進む方向（水平・正規化）
         final long start;
         final long maxTicks;
         Vector cam = null;
 
-        Cinematic(Player player, Location origLoc, GameMode origMode, ArmorStand camera,
+        Cinematic(Player player, Location origLoc, GameMode origMode, Entity camera,
                   LivingEntity boss, Vector fwd, long start, long maxTicks) {
             this.player = player;
             this.origLoc = origLoc;
@@ -225,6 +225,7 @@ public final class GameManager {
 
     /** mob を動かす。トロッコに乗っていれば、乗せたままトロッコごと動かす */
     private void moveMob(LivingEntity le, Location dest) {
+        if (le instanceof org.bukkit.entity.EnderDragon dr) dr.setPhase(org.bukkit.entity.EnderDragon.Phase.HOVER);
         internalMove = true;
         try {
             Entity cart = cartOf(le.getUniqueId());
@@ -441,7 +442,8 @@ public final class GameManager {
     /** プレイヤーの (t, s) から dist マス離れたランダムな地点 {t, s}（敵=坂の上側、味方=坂の下側） */
     private double[] spawnPoint(Course c, double pt, double ps, boolean front, double dist, boolean free) {
         ThreadLocalRandom r = ThreadLocalRandom.current();
-        double s = r.nextDouble(-Course.MOB_S, Course.MOB_S);
+        // 出現する列: spawn-lane-center が true なら道の真ん中、false ならランダム
+        double s = cfg().getBoolean("spawn-lane-center", false) ? 0.0 : r.nextDouble(-Course.MOB_S, Course.MOB_S);
         double dl = s - ps;
         double dt = Math.sqrt(Math.max(1.0, dist * dist - dl * dl));   // 直線距離がちょうど dist になる
         double t = front ? pt + dt : pt - dt;
@@ -507,6 +509,10 @@ public final class GameManager {
             le.setCollidable(false);
             le.setAI(false);          // 直線移動のみ（AI・経路探索は使わない）
             le.setGravity(false);
+            if (le instanceof org.bukkit.entity.EnderDragon dr) {
+                dr.setAI(true);           // AI を切ると羽ばたかないので、動きは固定（HOVER）にして AI は残す
+                dr.setPhase(org.bukkit.entity.EnderDragon.Phase.HOVER);
+            }
             if (le instanceof Ageable a) a.setAdult();
             if (spec.scale() != 1.0) {
                 AttributeInstance ai = le.getAttribute(Attribute.SCALE);
@@ -673,19 +679,12 @@ public final class GameManager {
     private void startCinematic(Course c, Player p, LivingEntity boss, MobInfo mi) {
         UUID id = p.getUniqueId();
         if (cinematics.containsKey(id)) return;
-        if (pushes.containsKey(id)) endPush(id);
 
         Location orig = p.getLocation().clone();
         GameMode mode = p.getGameMode();
 
-        ArmorStand cam = c.world.spawn(boss.getLocation(), ArmorStand.class, a -> {
-            a.setInvisible(true);
-            a.setMarker(true);
-            a.setGravity(false);
-            a.setInvulnerable(true);
-            a.setPersistent(false);
-            a.setSilent(true);
-        });
+        // カメラ用の見えないエンティティ（Marker は何も描画されない）
+        Entity cam = c.world.spawn(boss.getLocation(), org.bukkit.entity.Marker.class, a -> a.setPersistent(false));
 
         Vector fwd = new Vector(mi.dirT * c.dx + mi.dirS * c.lx, 0, mi.dirT * c.dz + mi.dirS * c.lz);
         if (fwd.lengthSquared() < 1e-6) fwd = new Vector(-c.dx, 0, -c.dz);
@@ -705,6 +704,16 @@ public final class GameManager {
                 Title.Times.times(Duration.ofMillis(200), Duration.ofMillis(2200), Duration.ofMillis(500))));
         boss.getWorld().playSound(boss.getLocation(), spec.introSound(), 4f, 1f);
         tickCinematic(cin);
+    }
+
+    /** 乱入演出中も、押されている最中なら押しを続ける（本当の位置は cin.origLoc に持つ） */
+    private void tickCinematicPushes() {
+        Course c = course;
+        if (c == null || !c.ready) return;
+        for (Cinematic cin : new ArrayList<>(cinematics.values())) {
+            Push push = pushes.get(cin.player.getUniqueId());
+            if (push != null) stepPush(c, cin.player, push, cin);
+        }
     }
 
     private void tickCinematics() {
@@ -748,7 +757,7 @@ public final class GameManager {
         }
 
         Location cl = new Location(cin.boss.getWorld(), cin.cam.getX(),
-                cin.cam.getY() - cin.camera.getEyeHeight(), cin.cam.getZ());
+                cin.cam.getY(), cin.cam.getZ());
         cl.setDirection(bl.toVector().subtract(cin.cam));
         cin.camera.teleport(cl);
         return true;
@@ -798,6 +807,7 @@ public final class GameManager {
     public void tick() {
         tick++;
         tickCinematics();
+        tickCinematicPushes();
         tickBuffs();
         Course c = course;
         if (c == null || !c.ready) return;
@@ -909,7 +919,7 @@ public final class GameManager {
         if (push != null) {
             if (!touching.isEmpty()) joinPush(p, push, touching);
             Push cur = pushes.get(id);
-            if (cur != null) stepPush(c, p, cur);
+            if (cur != null) stepPush(c, p, cur, null);
             return;
         }
 
@@ -1189,9 +1199,9 @@ public final class GameManager {
         }
     }
 
-    private void stepPush(Course c, Player p, Push push) {
+    private void stepPush(Course c, Player p, Push push, Cinematic cin) {
         UUID id = p.getUniqueId();
-        Location loc = p.getLocation();
+        Location loc = cin != null ? cin.origLoc : p.getLocation();
         double t = c.t(loc);
         double s = clamp(c.s(loc), -Course.PLAYER_S, Course.PLAYER_S);
 
@@ -1202,8 +1212,12 @@ public final class GameManager {
         Location dest = c.at(nt, s);
         dest.setYaw(loc.getYaw());
         dest.setPitch(loc.getPitch());
-        p.teleport(dest);
-        p.setFallDistance(0f);
+        if (cin != null) {
+            cin.origLoc = dest;            // 演出中は見ているカメラはそのまま、本当の位置だけ動かす
+        } else {
+            p.teleport(dest);
+            p.setFallDistance(0f);
+        }
         moveRiders(c, push, nt, s);
         push.moved += intended;
 

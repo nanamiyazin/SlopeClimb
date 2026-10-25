@@ -1,7 +1,10 @@
 # 道の最大の長さ（マス）
 max-length: 200
 
-# mob をプレイヤーから何マス離れた場所（ランダム）に出すか
+# mob が出現する列（横位置）。true = 道の真ん中 / false = ランダム
+spawn-lane-center: false
+
+# mob をプレイヤーから何マス離れた場所に出すか
 spawn-distance: 10
 
 # 「巨大ねこ」「巨大ウーパールーパー」の大きさ倍率
@@ -74,6 +77,16 @@ enemy-mobs:
     seconds: 3.0
     power: 15
   phantom: {}
+  giant_cat:
+    seconds: 3.0
+    power: 20
+  giant_axolotl:
+    seconds: 3.0
+    power: 20
+  allay: {}
+  sniffer:
+    seconds: 3.0
+    power: 15
 
 # /koth ally <mob> [数] で使える mob
 ally-mobs:
@@ -105,6 +118,22 @@ ally-mobs:
   sniffer:
     seconds: 3.0
     power: 15
+  warden:
+    seconds: 5.0
+    power: 50
+  ender_dragon:
+    seconds: 8.0
+    power: 100
+  wither:
+    seconds: 5.0
+    power: 40
+  blaze: {}
+  creeper: {}
+  enderman: {}
+  ravager:
+    seconds: 3.0
+    power: 15
+  phantom: {}
 
 # /koth buff <enemy|ally> による強化。強化中は道の縦半分の床が変わる
 #   味方の強化 → 道の左半分（進行方向に向かって左）が氷ブロックに

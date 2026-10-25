@@ -150,13 +150,16 @@ public final class Records {
         int[] f = forces.getOrDefault(p.getUniqueId(), new int[]{0, 0});
         int net = f[0] - f[1];
 
-        // 名前は載せず、数だけを出す（上から 勝ち / 負け / 区切り / 押す力 / 押し戻す力 / 合計）
-        line(o, "wins", 6, Component.text("勝ち  " + wins(name), NamedTextColor.GREEN));
-        line(o, "losses", 5, Component.text("負け  " + losses(name), NamedTextColor.RED));
+        // 名前は載せず、数だけを出す（上から 勝ち / 負け / 勝敗合計 / 区切り / 押す力 / 押し戻す力 / 力の合計）
+        int w = wins(name), l = losses(name), tot = w - l;
+        line(o, "wins", 7, Component.text("勝ち  " + w, NamedTextColor.GREEN));
+        line(o, "losses", 6, Component.text("負け  " + l, NamedTextColor.RED));
+        line(o, "total", 5, Component.text("勝敗合計  " + (tot > 0 ? "+" : "") + tot,
+                tot > 0 ? NamedTextColor.GREEN : (tot < 0 ? NamedTextColor.RED : NamedTextColor.YELLOW)));
         line(o, "sep", 4, Component.text("──────────", NamedTextColor.DARK_GRAY));
         line(o, "push", 3, Component.text("押す力(味方)  " + f[0], NamedTextColor.AQUA));
         line(o, "back", 2, Component.text("押し戻す力(敵)  " + f[1], NamedTextColor.LIGHT_PURPLE));
-        line(o, "net", 1, Component.text("合計  " + (net > 0 ? "+" : "") + net,
+        line(o, "net", 1, Component.text("力の合計  " + (net > 0 ? "+" : "") + net,
                 net > 0 ? NamedTextColor.GREEN : (net < 0 ? NamedTextColor.RED : NamedTextColor.YELLOW)));
     }
 

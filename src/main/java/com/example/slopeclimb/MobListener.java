@@ -13,6 +13,7 @@ import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.entity.EntityTeleportEvent;
 import org.bukkit.event.entity.ExplosionPrimeEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerVelocityEvent;
 import org.bukkit.event.vehicle.VehicleDamageEvent;
 import org.bukkit.event.vehicle.VehicleDestroyEvent;
 
@@ -36,6 +37,17 @@ public final class MobListener implements Listener {
     @EventHandler(ignoreCancelled = true)
     public void onDamage(EntityDamageByEntityEvent e) {
         if (ownedBySlopeMob(e.getDamager())) e.setCancelled(true);
+    }
+
+    /** エンダードラゴンの翼で吹き飛ばされないようにする（近くにコース用ドラゴンがいる間だけ） */
+    @EventHandler(ignoreCancelled = true)
+    public void onVelocity(PlayerVelocityEvent e) {
+        for (Entity n : e.getPlayer().getNearbyEntities(25, 25, 25)) {
+            if (n instanceof org.bukkit.entity.EnderDragon && game.isSlopeMob(n)) {
+                e.setCancelled(true);
+                return;
+            }
+        }
     }
 
     /** 味方 mob はプレイヤーを攻撃目標にしない */
